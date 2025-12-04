@@ -1,0 +1,699 @@
+You are an expert Node.js / TypeScript CLI engineer working in the `jduncan-rva/skill-porter` repository.
+
+Your task: design and implement full Codex platform support in Skill Porter, using the existing Claude and Gemini support as the reference architecture. The end result must let users convert Claude Code and Gemini CLI plugins/skills into OpenAI Codex CLI–compatible MCP configurations and bundles, and (optionally) convert back from Codex into Claude/Gemini, with no regressions to current behavior.
+
+You must treat the following as your canonical references (read-only):
+
+* Core repo to modify: `https://github.com/jduncan-rva/skill-porter`
+* Codex CLI reference: `https://github.com/openai/codex`
+* Claude Code plugin system reference: `https://github.com/anthropics/claude-code/tree/main/plugins`
+
+Use these references to align semantics, file layouts, and MCP server configuration, but do not copy large blobs verbatim.
+
+---
+
+## CONTEXT AND CURRENT ARCHITECTURE
+
+Skill Porter is a Node.js CLI that currently understands at least two platforms:
+
+* Claude Code:
+
+  * Skills and plugins built around:
+
+    * `SKILL.md` (frontmatter + body)
+    * `.claude-plugin/plugin.json`
+    * `.claude/commands/*.md`
+    * `skills/*/SKILL.md`
+    * `mcp-servers.json`
+* Gemini CLI:
+
+  * Extensions and plugins built around:
+
+    * `gemini-extension.json`
+    * `GEMINI.md`
+    * any Gemini-specific command/manifest structures already handled by the repo
+
+Core structure in `jduncan-rva/skill-porter` (names approximated; respect actual code):
+
+* CLI entry point (Commander-based): `src/cli.js`
+
+  * Commands: `analyze`, `convert`, `validate`, `universal`, `create-pr`, `fork`, etc.
+* High-level orchestrator: `src/index.js`
+
+  * Exports a `SkillPorter` class or equivalent with methods:
+
+    * `analyze(sourcePath, opts)`
+    * `convert(sourcePath, targetPlatform, opts)`
+    * `validate(sourcePath, platform, opts)`
+    * `makeUniversal(sourcePath, opts)`
+* Platform detection: `src/analyzers/detector.js`
+
+  * Exports `PlatformDetector` and `PLATFORM_TYPES` (currently includes at least `claude`, `gemini`, maybe `universal`, `unknown`).
+* Validation: `src/analyzers/validator.js`
+
+  * Per-platform validators, e.g. `_validateClaude`, `_validateGemini`.
+* Converters:
+
+  * `src/converters/claude-to-gemini.js`
+  * `src/converters/gemini-to-claude.js`
+  * They parse respective manifests and docs, build an internal view of the skill/plugin, and emit the target platform’s structure and metadata.
+
+Your job is to add a third platform, `codex`, compatible with OpenAI Codex CLI and its MCP server configuration system.
+
+---
+
+## HIGH-LEVEL GOALS
+
+1. Introduce `codex` as a first-class platform in Skill Porter:
+
+   * Detection of Codex bundles.
+   * Validation of Codex bundle manifests and config snippets.
+   * Conversion from Claude → Codex and Gemini → Codex.
+   * Optionally, conversion from Codex → Claude and Codex → Gemini (if feasible without scope creep).
+
+2. Define a clear Codex bundle format that is:
+
+   * Self-contained (directory-based), analogous to Claude/Gemini plugin packages.
+   * Aligned with Codex’s `config.toml` and `mcp_servers` configuration.
+   * Easy to merge into `~/.codex/config.toml` by users.
+
+3. Integrate Codex into all relevant Skill Porter workflows:
+
+   * `analyze` recognizes Codex.
+   * `validate` can validate Codex bundles.
+   * `convert` accepts `--to codex` and can source from Claude/Gemini (and optionally Codex).
+   * `universal` can optionally produce or integrate Codex as a third target in a controlled way.
+
+4. Preserve existing behavior:
+
+   * No breaking changes to existing Claude/Gemini detection, validation, or conversion.
+   * Error handling, logs, and CLI UX remain consistent.
+
+---
+
+## CODEX BUNDLE FORMAT SPEC
+
+Design a Codex plugin/bundle layout under a single directory, analogous to Claude plugins, but mapped to Codex’s configuration model:
+
+Example layout:
+
+* `<codex-bundle-root>/`
+
+  * `codex-plugin.toml`       → Codex bundle manifest (primary).
+  * `CODEX.md`               → Human-readable documentation for Codex users.
+  * `config-snippet.toml`    → TOML fragment intended to be merged into `~/.codex/config.toml`.
+  * `shared/` (optional)     → Any shared assets you already standardize across converters.
+  * `docs/` (optional)       → Additional docs mirrored from source platform.
+
+You can add extra subdirectories only if needed, but keep the surface area minimal and aligned with existing patterns for Claude/Gemini converters.
+
+### 1. `codex-plugin.toml` schema
+
+Define and implement a minimal, practical TOML schema. Treat it as Skill Porter’s manifest for Codex bundles, not an official Codex artifact, but keep it directly mappable to Codex’s `config.toml`.
+
+Required top-level keys:
+
+```toml
+name = "my-codex-plugin"
+description = "Short description of the plugin."
+version = "1.0.0"    # can be sourced from Claude/Gemini manifests or defaulted
+
+category = "general" # optional
+author = "Converted via skill-porter" # optional
+homepage = "https://example.com"      # optional
+repository = "https://github.com/..." # optional
+```
+
+MCP server configuration section:
+
+Use a structure that mirrors Codex’s `[mcp_servers]` configuration, as described in the Codex repo:
+
+```toml
+[mcp_servers.github]
+transport = "stdio"          # or "sse" / "http" depending on server type
+command = "node"
+args = ["./mcp/github-mcp-server.js"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.github.env]
+GITHUB_TOKEN = "${GITHUB_TOKEN}"  # reference to environment variables
+
+[mcp_servers.github.tools]
+enabled_tools = ["issues", "pull_requests"]
+disabled_tools = []
+```
+
+Implementation notes:
+
+* Use whatever keys Codex actually documents for MCP server configuration; do not invent new semantics.
+* Keep placeholders like `${GITHUB_TOKEN}` or `{ from_env = "GITHUB_TOKEN" }` depending on how you choose to standardize environment references.
+* Store enough metadata to reconstruct equivalent Claude/Gemini configuration if you later implement reverse conversion.
+
+### 2. `config-snippet.toml`
+
+This file is a direct fragment meant for Codex users to copy/merge into `~/.codex/config.toml`. It should:
+
+* Contain only the `[mcp_servers.*]` tables and any related tool configuration needed to enable the plugin’s servers.
+* Match Codex’s expected structure under `[mcp_servers]` exactly.
+* Optionally include human-readable comments at the top describing how to install:
+
+Example:
+
+```toml
+# Paste or merge the following into your ~/.codex/config.toml
+# under the top-level [mcp_servers] section.
+
+[mcp_servers.github]
+transport = "stdio"
+command = "node"
+args = ["${workspace}/mcp/github-mcp-server.js"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+
+[mcp_servers.github.env]
+GITHUB_TOKEN = { from_env = "GITHUB_TOKEN" }
+
+[mcp_servers.github.tools]
+enabled_tools = ["issues", "pull_requests"]
+disabled_tools = []
+```
+
+Implementation notes:
+
+* Derive this from a normalized internal representation of MCP server config, not ad-hoc string templates.
+* Keep the file minimal and explicit; no extraneous sections.
+
+### 3. `CODEX.md`
+
+This is the companion documentation for Codex users. Include sections:
+
+* Title: `# <Plugin Name> – Codex CLI Plugin`
+* Short description (mirroring or summarizing original SKILL.md / GEMINI.md).
+* “Installation”:
+
+  * Where to put the bundle.
+  * How to merge `config-snippet.toml` into `~/.codex/config.toml`.
+  * Any environment variables required.
+* “Usage”:
+
+  * How Codex will discover and use these MCP servers (based on Codex docs).
+  * Any reference info from the original skill/extension.
+* “Source”:
+
+  * Note original platform (Claude or Gemini) and that it was generated by Skill Porter.
+
+Do not assume Codex has a native “plugin marketplace”; this is user-facing documentation only.
+
+---
+
+## PLATFORM ENUM AND DETECTION
+
+Modify `src/analyzers/detector.js` (names approximate; respect actual ones).
+
+### 1. Extend platform enumeration
+
+In `PLATFORM_TYPES`, add:
+
+```js
+CODEX: 'codex'
+```
+
+Ensure all places that reference `PLATFORM_TYPES` handle `codex` safely (switch statements, maps, logs).
+
+### 2. File classification and detection rules
+
+Extend any `files` or classification structures to include Codex:
+
+```js
+files: {
+  claude: [],
+  gemini: [],
+  codex: [],
+  shared: []
+}
+```
+
+Add a Codex detection routine. Example approach:
+
+* `_detectCodexFiles(dirPath)`:
+
+  * If `codex-plugin.toml` exists:
+
+    * Attempt to parse as TOML.
+    * Record entry like:
+
+      * `{ file: 'codex-plugin.toml', type: 'manifest', valid: true/false, error?: string }`
+  * If `config-snippet.toml` exists:
+
+    * Try parsing as TOML.
+    * Record as `{ file: 'config-snippet.toml', type: 'config', valid: true/false }`
+  * If `CODEX.md` exists:
+
+    * Record as `{ file: 'CODEX.md', type: 'docs' }`
+
+Resolve platform:
+
+* `hasClaude` if core Claude markers found (`SKILL.md`, `.claude-plugin`, etc.).
+* `hasGemini` if core Gemini markers found (`gemini-extension.json`, etc.).
+* `hasCodex` if `codex-plugin.toml` or `config-snippet.toml` is present and parseable or strongly indicative.
+
+Platform determination:
+
+* If any two or more of {Claude, Gemini, Codex} are present → `platform = PLATFORM_TYPES.UNIVERSAL`.
+* If exactly one is present → `platform = that platform`.
+* Else → `platform = UNKNOWN`.
+
+### 3. Metadata extraction
+
+Where detector currently builds `metadata` (e.g., `metadata.claude`, `metadata.gemini`), extend to include `metadata.codex`:
+
+* Parse `codex-plugin.toml` into a JS object and store under `metadata.codex.manifest`.
+* Optionally parse `config-snippet.toml` into `metadata.codex.configSnippet`.
+* Extract `name`, `description`, `version`, and a normalized array/map of MCP servers.
+
+This metadata will be used by validators and converters.
+
+---
+
+## VALIDATION LOGIC
+
+Modify `src/analyzers/validator.js` to support Codex.
+
+### 1. Entry point
+
+Update the exported `validate(dirPath, platform)` method to handle:
+
+* `platform === PLATFORM_TYPES.CODEX`
+* `platform === PLATFORM_TYPES.UNIVERSAL` with Codex present (if you decide to validate all platforms in a universal bundle).
+
+When Codex is relevant, call a new private method:
+
+```js
+_validateCodex(dirPath)
+```
+
+### 2. `_validateCodex(dirPath)`
+
+Implement the following:
+
+* Check for `codex-plugin.toml`:
+
+  * If missing: add a validation error: `"Missing required file: codex-plugin.toml"`.
+* Parse `codex-plugin.toml` with a TOML parser:
+
+  * If parsing fails: add error `"Invalid TOML in codex-plugin.toml: <message>"`.
+* Enforce manifest constraints:
+
+  * `name`: required, non-empty string.
+  * `description`: required, non-empty; if length is very short, add a warning (not error).
+  * `version`: required; basic string check is enough.
+* Check `[mcp_servers]`:
+
+  * Ensure at least one MCP server entry exists; if none, add warning: `"No [mcp_servers.*] entries defined; Codex plugin provides no tools."`
+  * For each server:
+
+    * Validate `transport` (must be one of recognized values per Codex docs).
+    * For `transport = "stdio"`:
+
+      * Require `command` string.
+      * Optional `args` array.
+    * For `transport = "http"` / `"sse"`:
+
+      * Require `url` string.
+    * If `env` exists, ensure it is an object; warn if empty.
+    * If `tools`/`enabled_tools`/`disabled_tools` exist, ensure they are arrays of strings.
+* Validate `config-snippet.toml` (if present):
+
+  * Parse TOML; if fails, add error `"Invalid TOML in config-snippet.toml: <message>"`.
+  * Verify presence of `[mcp_servers.*]` tables; warn if absent.
+
+Also:
+
+* If `CODEX.md` is missing, add a warning: `"Missing CODEX.md documentation file (recommended)."`
+
+Return a structured result consistent with existing validators:
+
+```js
+{
+  valid: errors.length === 0,
+  errors,
+  warnings
+}
+```
+
+---
+
+## CONVERTER ARCHITECTURE PLAN
+
+To prevent combinatorial explosion and to simplify Codex integration, introduce a small internal intermediate representation (IR) for a “universal skill/plugin.” Reuse or refactor existing Claude/Gemini converters to use this IR.
+
+### 1. Internal IR: `UniversalSkill`
+
+Define this IR in a shared module (e.g., `src/model/universal-skill.js`). You can keep it as JSDoc-typed plain JS:
+
+```js
+/**
+ * @typedef {Object} UniversalSkill
+ * @property {string} name
+ * @property {string} description
+ * @property {string} [version]
+ * @property {Object.<string, McpServerConfig>} mcpServers
+ * @property {Array.<string>} [enabledTools]
+ * @property {Array.<string>} [disabledTools]
+ * @property {Object} [env]                 // key -> { required: boolean, default?: string }
+ * @property {Object} [docs]                // { claudeBody?, geminiBody?, codexBody? }
+ * @property {Object} [sourceMeta]          // platform-specific extras
+ */
+```
+
+```js
+/**
+ * @typedef {Object} McpServerConfig
+ * @property {string} name
+ * @property {string} transport            // 'stdio' | 'http' | 'sse' | ...
+ * @property {string} [command]
+ * @property {Array.<string>} [args]
+ * @property {string} [url]
+ * @property {boolean} [enabled]
+ * @property {number} [startupTimeoutSec]
+ * @property {number} [toolTimeoutSec]
+ * @property {Object.<string,string>} [env]
+ * @property {Array.<string>} [enabledTools]
+ * @property {Array.<string>} [disabledTools]
+ */
+```
+
+Refactor the existing converters to:
+
+* Claude → UniversalSkill
+* UniversalSkill → Claude
+* Gemini → UniversalSkill
+* UniversalSkill → Gemini
+
+Then add:
+
+* Codex → UniversalSkill (optional now, useful for reverse conversion).
+* UniversalSkill → Codex.
+
+If this refactor is too heavy, you may instead mirror existing direct converter style, but the IR path is strongly preferred.
+
+### 2. Claude → Codex converter
+
+Create `src/converters/claude-to-codex.js`:
+
+Structure:
+
+```js
+class ClaudeToCodexConverter {
+  constructor(sourcePath, outputPath, options?) { ... }
+  async convert() { ... }
+}
+module.exports = { ClaudeToCodexConverter };
+```
+
+Steps in `convert()`:
+
+1. Analyze source Claude directory:
+
+   * Parse `SKILL.md` frontmatter:
+
+     * Extract `name`, `description`, optional tool/agent config.
+   * Parse `.claude-plugin/plugin.json` and `mcp-servers.json` if present:
+
+     * Extract MCP servers definitions and any tool restrictions.
+   * Build a `UniversalSkill` object.
+
+2. Generate Codex manifest + config:
+
+   * Use `UniversalSkill` to create `codex-plugin.toml`:
+
+     * Map `name`, `description`, `version`.
+     * For each MCP server, map to `[mcp_servers.<name>]` tables.
+     * Map `enabledTools` / `disabledTools` into `enabled_tools` and `disabled_tools` under `[mcp_servers.<name>.tools]` where appropriate.
+
+   * Generate `config-snippet.toml`:
+
+     * Same `[mcp_servers]` entries, but scoped to Codex config snippet.
+     * Prefer relative paths with placeholders (e.g., `${workspace}`, etc.) instead of environment-specific ones.
+
+3. Generate `CODEX.md`:
+
+   * Title + quick explanation.
+   * Installation instructions (merge `config-snippet.toml` into `~/.codex/config.toml`).
+   * Usage hints derived from SKILL docs.
+   * Environment variables list (if any MCP server requires them).
+   * Short “Converted by skill-porter” note.
+
+4. Create directories as needed (`outputPath`, `docs`, `shared`), reusing any helpers used by existing converters.
+
+5. Return a result object in the same shape as other converters: `{ success, files, warnings, metadata }`.
+
+### 3. Gemini → Codex converter
+
+Create `src/converters/gemini-to-codex.js`:
+
+Structure mirrors Claude→Codex converter:
+
+```js
+class GeminiToCodexConverter {
+  constructor(sourcePath, outputPath, options?) { ... }
+  async convert() { ... }
+}
+module.exports = { GeminiToCodexConverter };
+```
+
+Steps:
+
+1. Analyze Gemini source:
+
+   * Parse `gemini-extension.json`:
+
+     * `name`, `description`, `version`, `mcpServers`, `settings`, `excludeTools`, etc.
+   * Parse `GEMINI.md` (if present).
+   * Build `UniversalSkill`:
+
+     * `mcpServers` from manifest.
+     * `enabledTools`/`disabledTools` from `excludeTools` or equivalent fields.
+     * `env` from settings/required environment variables.
+
+2. Generate Codex artifacts:
+
+   * `codex-plugin.toml` from `UniversalSkill`.
+   * `config-snippet.toml` with `[mcp_servers.*]` entries.
+   * `CODEX.md` combining Gemini docs with Codex-specific installation and usage.
+
+3. Ensure structures and return result consistent with Claude→Codex.
+
+### 4. Optional: Codex → Claude and Codex → Gemini
+
+If scope allows, implement reverse converters:
+
+* `src/converters/codex-to-claude.js`
+* `src/converters/codex-to-gemini.js`
+
+They should:
+
+* Parse `codex-plugin.toml` and `config-snippet.toml` into `UniversalSkill`.
+* Generate:
+
+  * For Claude:
+
+    * `SKILL.md` with frontmatter (name, description, tools).
+    * `.claude-plugin/plugin.json`.
+    * `mcp-servers.json`.
+  * For Gemini:
+
+    * `gemini-extension.json`.
+    * `GEMINI.md`.
+
+Take care to preserve environment variable semantics and tool lists as much as possible.
+
+---
+
+## SKILL PORTER CORE INTEGRATION
+
+Modify `src/index.js` (or equivalent Skill Porter orchestrator) to support the Codex platform.
+
+### 1. `SkillPorter.convert`
+
+Extend logic so that:
+
+* `targetPlatform` can be `'codex'`.
+* Validation of `targetPlatform` includes Codex.
+
+Routing:
+
+* If `detectedPlatform === 'claude'` and `targetPlatform === 'codex'`:
+
+  * Use `ClaudeToCodexConverter`.
+* If `detectedPlatform === 'gemini'` and `targetPlatform === 'codex'`:
+
+  * Use `GeminiToCodexConverter`.
+* If `detectedPlatform === 'codex'` and `targetPlatform === 'claude'`:
+
+  * Use `CodexToClaudeConverter` if implemented; otherwise throw a clear “not supported yet” error.
+* If `detectedPlatform === 'codex'` and `targetPlatform === 'gemini'`:
+
+  * Use `CodexToGeminiConverter` under same constraints.
+* If `detectedPlatform === 'codex'` and `targetPlatform === 'codex'`:
+
+  * Short-circuit: return an “already Codex” result or a no-op with a clear message.
+
+Ensure any “auto-detect platform” logic works when Codex is added to `PLATFORM_TYPES`.
+
+### 2. `SkillPorter.validate`
+
+Ensure `validate(sourcePath, platform)`:
+
+* Accepts `platform = 'codex'`.
+* Calls the new `_validateCodex` branch.
+* For `platform = 'universal'`:
+
+  * Decide whether to validate Codex as part of universal; if yes, invoke Codex validation when Codex files are present.
+
+### 3. `SkillPorter.makeUniversal`
+
+Decide semantics for Codex in universal bundles:
+
+* Minimum requirement:
+
+  * Do not break existing Claude+Gemini universal flow.
+* Option:
+
+  * Add a flag or default behavior to include Codex outputs when a universal bundle is generated:
+
+    * E.g., produce `/universal/claude`, `/universal/gemini`, `/universal/codex` subtrees.
+
+If you extend `makeUniversal`, document the new behavior and keep log messages accurate.
+
+---
+
+## CLI WIRES AND UX
+
+Modify `src/cli.js` to expose Codex in the CLI.
+
+### 1. `convert` command
+
+* Update the `--to` option help text to list `codex` as a valid target.
+* Ensure parsing of `--to codex` is wired to `SkillPorter.convert(..., 'codex')`.
+* Post-conversion messages:
+
+  * If `targetPlatform === 'codex'`, add specific follow-up instructions:
+
+    * e.g., “Inspect `config-snippet.toml` and merge it into `~/.codex/config.toml` under `[mcp_servers]`.”
+
+### 2. `analyze` command
+
+* When printing detected platform, include `codex` as possible result.
+* When printing discovered files, list Codex-specific files under a dedicated section:
+
+  * E.g., “Codex files:” then list `codex-plugin.toml`, `config-snippet.toml`, etc.
+* Include any extracted metadata (plugin name, number of MCP servers, etc.) similar to Claude/Gemini.
+
+### 3. `validate` command
+
+* `--platform` option help text must mention `codex`.
+* Behavior:
+
+  * `skill-porter validate ./path --platform codex` runs Codex validation logic and prints:
+
+    * Valid/invalid summary.
+    * Errors and warnings.
+
+### 4. `universal` / `create-pr` / `fork`
+
+* Only modify these commands if Codex is actually integrated into universal flows.
+* Update any messaging that currently assumes “two platforms” to avoid confusing users if Codex is included.
+
+---
+
+## DEPENDENCIES AND SAFETY
+
+* Introduce a TOML parser dependency (e.g., `@iarna/toml` or `toml`) in a minimal and consistent way:
+
+  * Wrap TOML parsing in a small utility module (e.g., `src/utils/toml.js`) with:
+
+    * `parseToml(fileContent)` → throws or returns parse result.
+    * `stringifyToml(jsObject)` if needed.
+* Handle parse errors gracefully:
+
+  * No unhandled exceptions; instead, push errors into validator or converter result objects.
+* Do not embed any secret values into generated files:
+
+  * Keep environment references as placeholders (`${VAR}` or `from_env` patterns).
+* Do not break existing exports or CLI flags.
+
+---
+
+## TESTING PLAN
+
+Extend or create tests around the new Codex behavior. If a test framework already exists (Jest, Mocha, Node test runner), integrate with it; otherwise, add minimal tests, but do not skip testing.
+
+Test categories:
+
+1. Detection tests:
+
+   * Fixture: Codex-only bundle with `codex-plugin.toml` and `config-snippet.toml`.
+
+     * Expect `platform = 'codex'`.
+   * Fixture: Mixed Claude + Codex.
+
+     * Expect `platform = 'universal'`.
+
+2. Validation tests:
+
+   * Valid Codex bundle:
+
+     * `codex-plugin.toml` with at least one `[mcp_servers.*]` entry.
+     * `config-snippet.toml` with matching entries.
+     * Expect `valid === true` and zero errors.
+   * Invalid manifest:
+
+     * Missing `name` or invalid TOML.
+     * Expect `valid === false` with appropriate error messages.
+   * Invalid `config-snippet.toml`:
+
+     * Malformed TOML; expect error.
+
+3. Conversion tests:
+
+   * Claude → Codex:
+
+     * Use a simple Claude fixture (SKILL.md + MCP config).
+     * Confirm output bundle contains:
+
+       * `codex-plugin.toml` with correct name/description and at least one MCP server.
+       * `config-snippet.toml` referencing that server.
+       * `CODEX.md`.
+   * Gemini → Codex:
+
+     * Similar fixture with `gemini-extension.json`.
+     * Verify mapping of MCP servers, env variables, and tools.
+
+4. Optional round-trip tests:
+
+   * If Codex → Claude and Codex → Gemini are implemented:
+
+     * Claude → Codex → Claude should preserve name and at least basic MCP server attributes.
+     * Gemini → Codex → Gemini likewise.
+
+---
+
+## DOCS AND MISC
+
+* Update README or main docs to:
+
+  * List Codex as a supported platform: `claude`, `gemini`, `codex`.
+  * Provide example commands:
+
+    * `skill-porter convert ./my-claude-skill --to codex --output ./my-codex-plugin`
+    * `skill-porter validate ./my-codex-plugin --platform codex`
+  * Briefly describe Codex bundle layout and `config-snippet.toml` usage.
+
+* Ensure log messages and CLI help strings are consistent, concise, and accurate when referring to Codex.
+
+Your deliverable is production-ready code plus tests and minimal documentation updates implementing all the above, with no regressions to existing Claude/Gemini behavior.
+vvvvvv
