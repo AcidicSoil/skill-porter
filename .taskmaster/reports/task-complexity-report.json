@@ -1,0 +1,93 @@
+{
+	"meta": {
+		"generatedAt": "2025-12-10T23:36:44.685Z",
+		"tasksAnalyzed": 10,
+		"totalTasks": 10,
+		"analysisCount": 10,
+		"thresholdScore": 5,
+		"projectName": "Taskmaster",
+		"usedResearch": true
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 1,
+			"taskTitle": "Initialize Project Structure and Domain Foundation",
+			"complexityScore": 2,
+			"recommendedSubtasks": 0,
+			"expansionPrompt": "",
+			"reasoning": "Greenfield setup of standard Go project structure and basic types. Low complexity as it involves defining structs and enums with no logic other than simple flag parsing."
+		},
+		{
+			"taskId": 2,
+			"taskTitle": "Implement Skill Discovery Module",
+			"complexityScore": 4,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Break down the file walking logic into a reusable 'Walker' and a specific 'SkillDetector'. Ensure the detector logic handles the specific markers (SKILL.md, gemini-extension.json) and edge cases like duplicate detection separately from the traversal logic.",
+			"reasoning": "Recursive file system traversal requires careful handling of paths, permissions, and edge cases (symlinks, duplicates). While not algorithmically complex, getting the edge cases right for robust discovery warrants splitting the walking from the identification logic."
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Implement Conversion Orchestration Engine",
+			"complexityScore": 5,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Separate the command construction logic (CommandBuilder) from the execution logic (ProcessRunner). The runner should handle stdout/stderr capturing and exit code mapping abstractly to facilitate easier unit testing without actual OS processes.",
+			"reasoning": "This involves interacting with external OS processes, managing standard I/O streams, and mapping exit codes. Concurrency safety might be needed if multiple conversions run in parallel later, though the prompt suggests sequential. Error handling for missing binaries adds slight complexity."
+		},
+		{
+			"taskId": 4,
+			"taskTitle": "Initialize TUI Model and Messages",
+			"complexityScore": 3,
+			"recommendedSubtasks": 0,
+			"expansionPrompt": "",
+			"reasoning": "Defining the state struct and message types is boilerplate Bubble Tea work. The complexity is low, primarily requiring a clear understanding of the state machine needed for the subsequent tasks."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Implement TUI Update Loop and Interactions",
+			"complexityScore": 8,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Decompose the Update function by handling different categories of messages in helper functions: 1) Navigation/Key inputs, 2) Async command results (Success/Fail/Discovered), 3) Global application state (Quit/Resize). This prevents a monolithic Update switch statement.",
+			"reasoning": "The core logic of a Bubble Tea app lives here. Managing state transitions (pending -> running -> success/fail), handling asynchronous command results (Msg), and user input simultaneously creates a complex state machine that is prone to bugs if not structured well."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Implement TUI Views and Layout",
+			"complexityScore": 6,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Create separate view components for the 'List', 'Detail', and 'Status Bar'. Implement a 'LayoutManager' to handle string joining and sizing constraints. Focus on making components pure functions of the state.",
+			"reasoning": "Rendering a TUI requires string manipulation, padding, and layout calculations. Ensuring the layout is responsive and information fits cleanly in the terminal window involves non-trivial presentation logic."
+		},
+		{
+			"taskId": 7,
+			"taskTitle": "Implement TUI Theming and Styling",
+			"complexityScore": 3,
+			"recommendedSubtasks": 0,
+			"expansionPrompt": "",
+			"reasoning": "Applying styles using Lip Gloss is declarative and relatively straightforward once the view structure is in place. It mainly involves defining a palette and wrapping strings."
+		},
+		{
+			"taskId": 8,
+			"taskTitle": "Implement CLI Entry Point",
+			"complexityScore": 2,
+			"recommendedSubtasks": 0,
+			"expansionPrompt": "",
+			"reasoning": "Standard wiring of components. Complexity is low as it's mostly composition of previously built parts (config, model, program run)."
+		},
+		{
+			"taskId": 9,
+			"taskTitle": "Implement Auto-Convert Mode",
+			"complexityScore": 6,
+			"recommendedSubtasks": 2,
+			"expansionPrompt": "Isolate the 'Next Task Selector' logic into a helper that determines what to run next based on current state. Update the state machine to handle a 'BatchProcessActive' state that automatically emits new StartCommands upon completion of previous ones.",
+			"reasoning": "This introduces a recursive-like loop within the event cycle (Action -> Result -> Trigger Next Action). Correctly handling the start/stop conditions and ensuring it doesn't freeze the UI or creating infinite loops adds complexity to the state management."
+		},
+		{
+			"taskId": 10,
+			"taskTitle": "Implement Gum Integration and Documentation",
+			"complexityScore": 3,
+			"recommendedSubtasks": 0,
+			"expansionPrompt": "",
+			"reasoning": "Integration with an external tool (gum) via exec is simple. Documentation is non-technical work. Low complexity."
+		}
+	]
+}

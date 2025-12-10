@@ -50,11 +50,11 @@ dev-debug.log
 *.sw?
 # OS specific
 
-# Task files
-# tasks.json
-# tasks/
-
 # personal
 .archived
 .todo
 codefetch
+
+# Task files
+# tasks.json
+# tasks/ 
