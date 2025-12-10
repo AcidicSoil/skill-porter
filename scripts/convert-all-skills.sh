@@ -9,6 +9,9 @@ success=0
 skipped=0
 failed=0
 found_skills=0
+RECURSIVE_MODE=1
+AUTO_CONVERT_MODE=0
+AUTO_TARGET=""
 
 summarize_and_exit() {
   echo
@@ -39,14 +42,20 @@ fi
 DEFAULT_SKILLS_DIR="./skills"
 
 SKILLS_DIR="$(gum input \
-  --placeholder "Scan root directory" \
+  --placeholder "Skill directory or parent" \
   --value "$DEFAULT_SKILLS_DIR" \
-  --prompt "Enter root directory to scan for skills (recursively): ")"
+  --prompt "Enter root directory (skill dir or parent): ")"
 SKILLS_DIR="${SKILLS_DIR:-$DEFAULT_SKILLS_DIR}"
 
 if [ ! -d "$SKILLS_DIR" ]; then
   echo "ERROR: Directory does not exist: $SKILLS_DIR" >&2
   exit 1
+fi
+
+if gum confirm "Recursively scan this directory and its subdirectories and convert each matching skill?"; then
+  RECURSIVE_MODE=1
+else
+  RECURSIVE_MODE=0
 fi
 
 TARGET_DEFAULT="$(printf '%s\n' gemini claude | gum choose \
@@ -65,6 +74,11 @@ mkdir -p "$OUT_BASE"
 echo
 echo "Configured:"
 echo "  Scan root:       $SKILLS_DIR"
+if [[ "$RECURSIVE_MODE" -eq 1 ]]; then
+  echo "  Scan mode:       Recursive (all skills under root)"
+else
+  echo "  Scan mode:       Single skill (root dir only)"
+fi
 echo "  Default target:  $TARGET_DEFAULT"
 echo "  Output base dir: $OUT_BASE"
 echo
@@ -80,54 +94,72 @@ convert_one() {
 
   name="$(basename "$skill")"
 
-  # Safety check in case this directory was matched oddly
   if [[ ! -f "$skill/SKILL.md" && ! -f "$skill/gemini-extension.json" ]]; then
     echo "Skipping $name: no SKILL.md or gemini-extension.json (not a skill root)."
     skipped=$((skipped + 1))
     return 0
   fi
 
-  gum style \
-    --border normal \
-    --margin "1 0" \
-    --padding "0 1" \
-    "Skill:   $name" \
-    "Path:    $skill" \
-    "Default: $target"
+  if [[ "$AUTO_CONVERT_MODE" -eq 1 ]]; then
+    target="$AUTO_TARGET"
+    gum style \
+      --border normal \
+      --margin "1 0" \
+      --padding "0 1" \
+      "Skill:   $name" \
+      "Path:    $skill" \
+      "Mode:    AUTO (target=$target)"
+  else
+    gum style \
+      --border normal \
+      --margin "1 0" \
+      --padding "0 1" \
+      "Skill:   $name" \
+      "Path:    $skill" \
+      "Default: $target"
 
-  choice="$(gum choose \
-    "Convert (target=$target)" \
-    "Convert as gemini" \
-    "Convert as claude" \
-    "Skip this skill" \
-    "Quit now")"
+    choice="$(gum choose \
+      "Convert (target=$target)" \
+      "Convert as gemini" \
+      "Convert as claude" \
+      "Convert ALL remaining (target=$target)" \
+      "Skip this skill" \
+      "Quit now")"
 
-  case "$choice" in
-    "Convert (target=$target)")
-      # use current target
-      ;;
-    "Convert as gemini")
-      target="gemini"
-      ;;
-    "Convert as claude")
-      target="claude"
-      ;;
-    "Skip this skill")
-      echo "Skipping: $name"
-      skipped=$((skipped + 1))
-      return 0
-      ;;
-    "Quit now")
-      echo "Aborting on user request."
-      summarize_and_exit
-      ;;
-  esac
+    case "$choice" in
+      "Convert (target=$target)")
+        ;;
+      "Convert as gemini")
+        target="gemini"
+        ;;
+      "Convert as claude")
+        target="claude"
+        ;;
+      "Convert ALL remaining (target=$target)")
+        AUTO_CONVERT_MODE=1
+        AUTO_TARGET="$target"
+        ;;
+      "Skip this skill")
+        echo "Skipping: $name"
+        skipped=$((skipped + 1))
+        return 0
+        ;;
+      "Quit now")
+        echo "Aborting on user request."
+        summarize_and_exit
+        ;;
+    esac
+  fi
 
   out="${OUT_BASE}/${name}-${target}"
   mkdir -p "$out"
 
   echo
-  echo "Converting: $name"
+  if [[ "$AUTO_CONVERT_MODE" -eq 1 ]]; then
+    echo "Auto-converting: $name"
+  else
+    echo "Converting: $name"
+  fi
   echo "  Source: $skill"
   echo "  Target: $target"
   echo "  Output: $out"
@@ -151,32 +183,44 @@ convert_one() {
 }
 
 ###############################################################################
-# Recursively discover skill roots and process them
+# Discover skills (recursive or single) and process them
 ###############################################################################
 
-# Use an associative array to deduplicate directories that contain both files
-declare -A SEEN_DIRS
+if [[ "$RECURSIVE_MODE" -eq 1 ]]; then
+  declare -A SEEN_DIRS
+  SKILL_FILES=()
 
-while IFS= read -r -d '' file; do
-  dir="$(dirname "$file")"
+  mapfile -d '' -t SKILL_FILES < <(
+    find "$SKILLS_DIR" \
+      -type f \( -name "SKILL.md" -o -name "gemini-extension.json" \) \
+      -print0
+  )
 
-  # Normalize to absolute path to avoid duplicates via different prefixes
-  dir="$(cd "$dir" && pwd)"
+  for file in "${SKILL_FILES[@]}"; do
+    [[ -z "$file" ]] && continue
 
-  if [[ -n "${SEEN_DIRS[$dir]:-}" ]]; then
-    continue
+    dir="$(dirname "$file")"
+    dir="$(cd "$dir" && pwd)"
+
+    if [[ -n "${SEEN_DIRS[$dir]:-}" ]]; then
+      continue
+    fi
+    SEEN_DIRS["$dir"]=1
+
+    found_skills=$((found_skills + 1))
+    convert_one "$dir" "$TARGET_DEFAULT"
+  done
+
+  if (( found_skills == 0 )); then
+    echo "No skill directories found under: $SKILLS_DIR"
   fi
-  SEEN_DIRS["$dir"]=1
-
-  found_skills=$((found_skills + 1))
-  convert_one "$dir" "$TARGET_DEFAULT"
-
-done < <(find "$SKILLS_DIR" \
-            -type f \( -name "SKILL.md" -o -name "gemini-extension.json" \) \
-            -print0)
-
-if (( found_skills == 0 )); then
-  echo "No skill directories found under: $SKILLS_DIR"
+else
+  if [[ -f "$SKILLS_DIR/SKILL.md" || -f "$SKILLS_DIR/gemini-extension.json" ]]; then
+    found_skills=1
+    convert_one "$SKILLS_DIR" "$TARGET_DEFAULT"
+  else
+    echo "No skill files (SKILL.md or gemini-extension.json) found in: $SKILLS_DIR"
+  fi
 fi
 
 summarize_and_exit
