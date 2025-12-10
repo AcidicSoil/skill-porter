@@ -10,6 +10,8 @@
         "priority": "high",
         "dependencies": [],
         "status": "pending",
+        "phase": 0,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -47,10 +49,10 @@
         "details": "In `src/spec/codexPluginSpec.ts`:\n1.  Define TypeScript interfaces: `CodexPluginManifest`, `CodexCapabilities`.\n2.  Implement `defaultCodexLayout(repoRoot)` to return a `CodexPluginLayout` object with repo-relative paths for `codex-plugin.toml`, `CODEX_AGENTS.md`, etc.\n3.  Implement `parseCodexManifest` which uses the `core/toml` utility.\n4.  Implement `validateCodexManifest` using a schema validation library like `zod` to enforce field presence, types, and formats (e.g., `plugin.id` must be a slug). It should return a structured validation result, not throw errors.",
         "testStrategy": "Create a suite of unit tests for `validateCodexManifest` using a table-driven approach. Include test cases for valid manifests, manifests with missing required fields, fields with incorrect types, and invalid string formats. Test the `defaultCodexLayout` function to ensure it generates correct, relative paths.",
         "priority": "high",
-        "dependencies": [
-          1
-        ],
+        "dependencies": [1],
         "status": "pending",
+        "phase": 1,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -65,9 +67,7 @@
             "id": 2,
             "title": "Implement TOML Manifest Parsing and Zod Validation Schema",
             "description": "Implement the `parseCodexManifest` function using the `core/toml` utility and create a comprehensive Zod schema for the `validateCodexManifest` function to validate the manifest's structure, types, and formats.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Using the `core/toml` utility, create the `parseCodexManifest` function. Define a detailed Zod schema that enforces all required and optional fields, their types (string, boolean, etc.), and specific string formats like slugs for `plugin.id`. This schema will be the core of the `validateCodexManifest` function.",
             "status": "pending",
             "testStrategy": "The `validateCodexManifest` function, which will use this schema, will be tested in a subsequent subtask. For this task, verification involves ensuring the schema correctly compiles and can parse a basic, valid manifest object without errors."
@@ -76,9 +76,7 @@
             "id": 3,
             "title": "Create Table-Driven Unit Tests for Codex Manifest Validator",
             "description": "Implement a comprehensive, table-driven unit test suite for the `validateCodexManifest` function. The tests should cover a wide range of valid and invalid manifest configurations to ensure the validator is robust and returns structured results.",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [2],
             "details": "Create a test file for `codexPluginSpec.ts`. Use a table-driven approach where each test case includes a manifest object and the expected validation result. Cover cases for valid manifests, missing required fields, incorrect types, invalid string formats (e.g., non-slug ID), and ensure the function returns a structured result, not throws errors.",
             "status": "pending",
             "testStrategy": "The test suite itself is the strategy. Success is measured by the test runner (e.g., Jest or Vitest) passing all defined test cases, achieving high code coverage for the validation logic, and confirming that both valid and invalid manifests produce the expected structured output."
@@ -92,10 +90,10 @@
         "details": "1.  Create `src/analyzers/codexMetadata.ts` with a `detectCodexFiles` function that uses `core/fs` to check for `codex/codex-plugin.toml` and other key files from the spec. If the manifest is found, it should be parsed using `spec/codexPluginSpec`.\n2.  Modify `src/analyzers/platformDetector.ts`'s `detectPlatform` function. It should now invoke `detectCodexFiles` and incorporate the result. If Codex artifacts are found alongside Claude or Gemini, the platform should be classified as `universal`.",
         "testStrategy": "Create mock repository fixtures in a temporary directory. Test scenarios include: a repo with only Codex files, a repo with Claude and Codex files (`universal`), a repo with all three platforms (`universal`), and a repo with no relevant files (`unknown`). Assert that `detectPlatform` returns the correct `PlatformMetadata` for each case.",
         "priority": "high",
-        "dependencies": [
-          2
-        ],
+        "dependencies": [2],
         "status": "pending",
+        "phase": 1,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -110,9 +108,7 @@
             "id": 2,
             "title": "Integrate Codex Detector into `platformDetector.ts`",
             "description": "Modify the `detectPlatform` function in `src/analyzers/platformDetector.ts` to use the new Codex detector and update the classification logic to handle 'universal' platforms when multiple artifact types are present.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "In `src/analyzers/platformDetector.ts`, import and call the new `detectCodexFiles` function. Update the logic inside `detectPlatform` to aggregate detection results. If Codex artifacts are found alongside Claude or Gemini artifacts, the function must return the classification 'universal'. Update existing tests and add new ones for all platform combinations.",
             "status": "pending",
             "testStrategy": "Update the test suite for `platformDetector.ts`. Create mock repository fixtures for new scenarios: Codex-only, Claude+Codex (`universal`), Gemini+Codex (`universal`), and all three (`universal`). Assert that `detectPlatform` returns the expected string classification for each fixture."
@@ -126,10 +122,10 @@
         "details": "In `src/validation/codexValidator.ts`, create the `validateCodex` function. This function will perform checks such as:\n1.  Verifying that file paths listed in `codex-plugin.toml` (e.g., `agents_file`) actually exist on disk.\n2.  Parsing the `codex-config.snippet.toml` and ensuring its `[mcp_servers.*]` sections are consistent with the `uses_mcp` capability in the manifest.\n3.  If `uses_mcp` is true, warn if no MCP servers are defined in the snippet.\n4.  Integrate this validator into the main `validate` command, which should run it whenever the `platformDetector` identifies Codex artifacts.",
         "testStrategy": "Use mock repository fixtures with various invalid states: a manifest pointing to a non-existent `CODEX_AGENTS.md`; a manifest with `uses_mcp = true` but an empty or missing config snippet; a snippet with malformed TOML. Verify that `validateCodex` produces specific, actionable error and warning messages for each case.",
         "priority": "high",
-        "dependencies": [
-          3
-        ],
+        "dependencies": [3],
         "status": "pending",
+        "phase": 2,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -144,9 +140,7 @@
             "id": 2,
             "title": "Implement File Existence Check for Manifest Paths",
             "description": "Add logic to the `validateCodex` function to verify that all file paths specified in `codex-plugin.toml` (e.g., `agents_file`, `docs_file`) actually exist on the filesystem.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Within `validateCodex`, after parsing the manifest, iterate through the properties that represent file paths. Use a filesystem utility (e.g., from `src/core/fs.ts`) to check for the existence of each file. If a file is missing, add a structured validation error to the results.",
             "status": "pending",
             "testStrategy": "This logic will be covered by the unit testing task (Subtask 4), specifically with a test fixture that has a `codex-plugin.toml` pointing to a non-existent file."
@@ -155,9 +149,7 @@
             "id": 3,
             "title": "Implement Validation for `codex-config.snippet.toml` and `uses_mcp`",
             "description": "Add logic to parse the `codex-config.snippet.toml` file and validate its contents against the `uses_mcp` capability flag in the main plugin manifest.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "The implementation should: 1. Check if `codex-config.snippet.toml` exists. 2. Parse it using the TOML utility. 3. If `uses_mcp` is true in the manifest, verify that at least one `[mcp_servers.*]` section exists in the snippet; if not, issue a warning. 4. If `uses_mcp` is false but server sections are present, issue a warning about the inconsistency.",
             "status": "pending",
             "testStrategy": "This will be tested in the dedicated unit testing task (Subtask 4) with fixtures for each scenario: `uses_mcp` is true with and without servers, and `uses_mcp` is false with servers present."
@@ -166,10 +158,7 @@
             "id": 4,
             "title": "Write Unit Tests for All Codex Validation Rules",
             "description": "Develop a comprehensive suite of unit tests using mock repository fixtures for the `validateCodex` function, ensuring all validation rules and edge cases are covered.",
-            "dependencies": [
-              2,
-              3
-            ],
+            "dependencies": [2, 3],
             "details": "Create several mock plugin directory structures using a library like `mock-fs`. These fixtures should represent various invalid states: a manifest pointing to a non-existent `agents_file`, a plugin with `uses_mcp=true` but a missing or empty config snippet, and a snippet with malformed TOML. Assert that `validateCodex` returns the specific, expected error and warning messages for each case.",
             "status": "pending",
             "testStrategy": "The test suite itself is the strategy. It will use a table-driven approach, mapping specific invalid fixtures to expected validation result objects to ensure correctness and prevent regressions."
@@ -183,10 +172,10 @@
         "details": "Implement two main functions:\n1.  `generateCodexAgentsDoc`: Takes context (plugin metadata, source doc content) and generates Markdown. It should strip platform-specific instructions (like Claude CLI installation), normalize headings, and ensure required sections like 'MCP servers' are present.\n2.  `generateCodexArchitectureDoc`: A simpler generator that creates a basic architecture document placeholder.\nUse a Markdown AST library like `unified` with `remark-parse` and `remark-stringify` to robustly manipulate the source markdown instead of using fragile regex.",
         "testStrategy": "For both generator functions, use snapshot testing. Create input context objects representing different types of skills (e.g., with/without MCP, simple/complex descriptions). The test will run the generator and compare the output Markdown to a stored 'golden' snapshot. This ensures consistent formatting.",
         "priority": "high",
-        "dependencies": [
-          2
-        ],
+        "dependencies": [2],
         "status": "pending",
+        "phase": 3,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -201,9 +190,7 @@
             "id": 2,
             "title": "Implement `generateCodexAgentsDoc` with AST Transformations",
             "description": "Develop the 'generateCodexAgentsDoc' function which uses the AST pipeline to parse source documentation, apply transformations to strip platform-specific content and normalize headings, and generate the final 'CODEX_AGENTS.md' content.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Using the 'unified' pipeline, implement AST traversal logic (e.g., with 'unist-util-visit') to identify and remove specific sections based on their headings (e.g., 'Claude CLI Installation'). Another transformation will normalize heading levels to ensure a consistent document structure. The function should also ensure required sections like 'MCP servers' are present.",
             "status": "pending",
             "testStrategy": "Unit tests will focus on the transformation logic. Sample Markdown ASTs will be used as input to verify that specific nodes are removed and heading depths are correctly adjusted in the output AST."
@@ -212,9 +199,7 @@
             "id": 3,
             "title": "Implement `generateCodexArchitectureDoc` and Add Snapshot Tests",
             "description": "Create the simpler 'generateCodexArchitectureDoc' function and implement a comprehensive snapshot testing strategy for both documentation generators to ensure consistent output.",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [2],
             "details": "Implement the 'generateCodexArchitectureDoc' function to produce a basic placeholder Markdown document. Set up Jest snapshot tests for both this function and 'generateCodexAgentsDoc'. The tests will involve creating various input contexts (e.g., different plugin metadata and source docs) and comparing the generated Markdown output against stored 'golden' snapshots.",
             "status": "pending",
             "testStrategy": "The primary testing method will be snapshot testing. Initial test runs will generate the baseline snapshot files. Subsequent test runs will compare generator output against these snapshots to detect any unintended changes or regressions."
@@ -228,11 +213,10 @@
         "details": "In `src/converters/claudeToCodexConverter.ts`, implement `convertClaudeToCodex`. The logic should:\n1.  Read the source `SKILL.md` and parse its YAML frontmatter.\n2.  Map frontmatter fields (`name`, `description`) to `CodexPluginManifest` fields (`plugin.id`, `display_name`, `description`). Slugify the name for `plugin.id`.\n3.  Infer `capabilities` (e.g., `uses_mcp`) from the presence of Claude MCP server definitions.\n4.  Use `docs/codexDocsGenerator` to generate `CODEX_AGENTS.md` and `CODEX_ARCHITECTURE.md`.\n5.  Generate `codex-config.snippet.toml` by mapping Claude MCP definitions to the Codex TOML format.\n6.  Write all four generated files to the target directory using `core/fs`.",
         "testStrategy": "Create several representative Claude skill fixtures. Run the converter on each fixture. The test should assert that the output files are created and their content matches 'golden' versions. Additionally, run the `codexValidator` on the generated output to ensure all converted plugins are valid by default.",
         "priority": "high",
-        "dependencies": [
-          4,
-          5
-        ],
+        "dependencies": [4, 5],
         "status": "pending",
+        "phase": 3,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -247,9 +231,7 @@
             "id": 2,
             "title": "Map Claude Frontmatter to Codex Manifest Object",
             "description": "Map the parsed YAML frontmatter data to a `CodexPluginManifest` object. This includes slugifying the name for the plugin ID and inferring capabilities like `uses_mcp`.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Take the parsed frontmatter object from subtask 1. Map `name` to `display_name` and a slugified version to `plugin.id`. Map `description`. Infer the `uses_mcp` capability by checking for the presence of Claude MCP server definitions in the frontmatter. Create and return a valid `CodexPluginManifest` TS object.",
             "status": "pending",
             "testStrategy": "Unit test the mapping function. Provide various frontmatter objects as input and assert that the output `CodexPluginManifest` object has the correct fields, including the slugified ID and the correctly inferred `uses_mcp` capability."
@@ -258,9 +240,7 @@
             "id": 3,
             "title": "Generate Codex Documentation and Configuration Files",
             "description": "Integrate the `codexDocsGenerator` to create documentation files and implement logic to generate the `codex-config.snippet.toml` from Claude's MCP definitions.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Call the `docs/codexDocsGenerator` with the parsed Claude data to produce the content for `CODEX_AGENTS.md` and `CODEX_ARCHITECTURE.md`. Separately, create a function that transforms the Claude MCP server definitions from the frontmatter into the TOML format required for `codex-config.snippet.toml`.",
             "status": "pending",
             "testStrategy": "For the config generation, unit test the TOML mapping function with various MCP definitions and verify the output string is correctly formatted. The documentation generation will be tested as part of the integration test in the next subtask."
@@ -269,10 +249,7 @@
             "id": 4,
             "title": "Write All Artifacts and Create Integration Tests",
             "description": "Finalize the converter by writing all generated artifacts (`codex-plugin.toml`, markdown docs, config snippet) to the target directory and create comprehensive integration tests.",
-            "dependencies": [
-              2,
-              3
-            ],
+            "dependencies": [2, 3],
             "details": "Use the `core/fs` utility to write the `CodexPluginManifest` (as `codex-plugin.toml`), the generated markdown files, and the config snippet to the output directory. Create integration tests that run the full `convertClaudeToCodex` function on test fixtures and validate the output using the `codexValidator` from Task 4.",
             "status": "pending",
             "testStrategy": "Create an end-to-end test suite. Run the converter on a complete Claude skill fixture. Assert that all four output files are created. Compare their contents against pre-defined 'golden' versions. Programmatically invoke `codexValidator` on the output directory and assert that it passes validation."
@@ -286,11 +263,10 @@
         "details": "In `src/converters/geminiToCodexConverter.ts`, implement `convertGeminiToCodex`. The logic is similar to the Claude converter but with different sources:\n1.  Read `gemini-extension.json` and `GEMINI.md`.\n2.  Map fields from the JSON file (`name`, `description`, `version`) to the `CodexPluginManifest`.\n3.  Map the `mcpServers` array to `[mcp_servers.*]` blocks in `codex-config.snippet.toml`.\n4.  Infer `capabilities.reads_files` etc., based on Gemini settings.\n5.  Use `docs/codexDocsGenerator` to transform `GEMINI.md` into `CODEX_AGENTS.md`.\n6.  Write all generated files to the target directory.",
         "testStrategy": "Create Gemini extension fixtures, including one with `mcpServers` and one without. Run the converter and compare the output `codex/` directory against stored snapshots. As with the Claude converter, programmatically run the `codexValidator` on the output to ensure its correctness.",
         "priority": "high",
-        "dependencies": [
-          4,
-          5
-        ],
+        "dependencies": [4, 5],
         "status": "pending",
+        "phase": 3,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -305,9 +281,7 @@
             "id": 2,
             "title": "Map Gemini Data to Codex Manifest and Config Snippet",
             "description": "Implement the logic to transform data from the parsed `gemini-extension.json` into a `CodexPluginManifest` object and a `codex-config.snippet.toml` string.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Using the parsed Gemini data, map fields like `name`, `description`, and `version` to the corresponding fields in the `CodexPluginManifest` interface. Iterate through the `mcpServers` array to generate TOML `[mcp_servers.*]` blocks. Infer `capabilities` like `uses_mcp` based on the presence of this array.",
             "status": "pending",
             "testStrategy": "Unit test the mapping function in isolation. Provide various input `gemini-extension.json` objects (e.g., with and without `mcpServers`) and assert that the generated `CodexPluginManifest` object and TOML config string are correctly structured and populated."
@@ -316,9 +290,7 @@
             "id": 3,
             "title": "Integrate Documentation Generator for GEMINI.md",
             "description": "Use the `docs/codexDocsGenerator` utility to transform the content of `GEMINI.md` into the required `CODEX_AGENTS.md` format.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Within the main `convertGeminiToCodex` function, pass the string content of `GEMINI.md` (read in subtask 1) to the `codexDocsGenerator`. Capture the returned string, which will be the content for the final `CODEX_AGENTS.md` file.",
             "status": "pending",
             "testStrategy": "Test this step as part of a larger integration test. Ensure that when a sample `GEMINI.md` is provided to the main converter, the generated `CODEX_AGENTS.md` file content matches a predefined snapshot or expected output."
@@ -327,10 +299,7 @@
             "id": 4,
             "title": "Implement File Writing and Integration Test with Validator",
             "description": "Write all generated artifacts (manifest, config, docs) to the target directory and create an integration test that validates the complete output using the `codexValidator`.",
-            "dependencies": [
-              2,
-              3
-            ],
+            "dependencies": [2, 3],
             "details": "Implement the final stage of the converter to write the generated `codex-plugin.toml`, `codex-config.snippet.toml`, and `CODEX_AGENTS.md` files to disk. Create an end-to-end integration test that runs the converter on a fixture Gemini extension and then calls `codexValidator` (from Task 4) on the output directory, asserting that the validation passes.",
             "status": "pending",
             "testStrategy": "The primary test is an integration test. It will use Gemini extension fixtures (e.g., a simple one, and one with MCP servers), run the converter, and then invoke `validateCodex` on the output directory. The test succeeds if the validator reports no errors."
@@ -344,11 +313,10 @@
         "details": "In `src/cli/convertCommand.ts`:\n1.  Update the command's options (e.g., in `commander.js`) to accept `codex` for the `--to` flag.\n2.  In the command handler, use the `platformDetector` to identify the source platform (Claude or Gemini).\n3.  Invoke the corresponding converter (`convertClaudeToCodex` or `convertGeminiToCodex`).\n4.  If the conversion is successful, print a standardized, copy-paste-friendly 'Next steps' message to the console, instructing the user how to update their `~/.codex/config.toml`.",
         "testStrategy": "Write integration tests for the CLI command. Use `child_process.exec` or a similar method to run `skill-porter convert --to codex` on temporary fixture repositories (one Claude, one Gemini). Assert that the command exits with code 0, that the `codex/` directory is created, and that the stdout contains the expected 'Next steps' block.",
         "priority": "high",
-        "dependencies": [
-          6,
-          7
-        ],
+        "dependencies": [6, 7],
         "status": "pending",
+        "phase": 3,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -363,9 +331,7 @@
             "id": 2,
             "title": "Create E2E tests for the `convert --to codex` CLI command",
             "description": "Develop end-to-end tests using `child_process` to execute the `skill-porter convert --to codex` command and verify its correctness for both Claude-to-Codex and Gemini-to-Codex conversion paths.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Create test fixtures for a Claude skill and a Gemini extension. Write tests that execute the CLI command as a child process against these fixtures. Assertions should verify the command exits successfully (code 0), the output `codex/` directory is created correctly, and the standard output contains the expected 'Next steps' guidance.",
             "status": "pending",
             "testStrategy": "The tests will be executed in a CI environment. They should prepare temporary fixture directories before each run and clean them up afterward to ensure test isolation. The stdout stream will be captured and checked for the specific guidance message."
@@ -379,10 +345,10 @@
         "details": "In `src/cli/universalCommand.ts`:\n1.  The command should first run the `platformDetector`.\n2.  Based on the detected platforms, it should determine which conversions are needed. For example, if only 'claude' is detected, it needs to run Gemini-from-Claude and Codex-from-Claude conversions.\n3.  After running all necessary conversions, it must run the full validation suite for all three platforms.\n4.  The command should fail (non-zero exit code) if any platform's validation fails, printing a summary of the errors.",
         "testStrategy": "Test the `universal` command against multiple starting states: a Claude-only repo, a Gemini-only repo, and a repo with Claude+Gemini. In each case, assert that the command successfully generates the missing platform artifacts and that a final `skill-porter validate` pass on the result is successful for all three platforms.",
         "priority": "high",
-        "dependencies": [
-          8
-        ],
+        "dependencies": [8],
         "status": "pending",
+        "phase": 3,
+        "mvp": true,
         "subtasks": [
           {
             "id": 1,
@@ -397,9 +363,7 @@
             "id": 2,
             "title": "Implement Conversion Execution Logic",
             "description": "Implement the logic within the `universal` command to execute the sequence of conversions determined in the previous step. This involves calling the appropriate conversion functions and handling their success or failure.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Based on the list of required conversions, create a loop or sequence of promises to call the corresponding converter functions (e.g., `convertClaudeToGemini`, `convertClaudeToCodex`). Ensure errors from any conversion step are caught and halt the process, reporting the failure.",
             "status": "pending",
             "testStrategy": "Using mocks for the actual converter functions, test that the execution logic calls the correct mocks in the expected order based on a predefined conversion plan. Also test error handling by having a mocked converter throw an error."
@@ -408,9 +372,7 @@
             "id": 3,
             "title": "Add Tri-Platform Validation and Integration Tests",
             "description": "After conversions are complete, run the validation suite for all three platforms. Write integration tests for the `universal` command to cover various starting repository states (e.g., Claude-only, Gemini-only).",
-            "dependencies": [
-              2
-            ],
+            "dependencies": [2],
             "details": "After the conversion sequence, invoke validators for Claude, Gemini, and Codex. Aggregate the results and if any fail, print a summary and exit with a non-zero code. Create test fixtures for different starting states and run the full `skill-porter universal` command against them.",
             "status": "pending",
             "testStrategy": "Write integration tests using temporary fixture repositories (one Claude-only, one Gemini-only, etc.). Use `child_process.exec` to run `skill-porter universal`. Assert that the command exits with the correct status code and that the missing platform artifacts are correctly generated on the filesystem."
@@ -424,10 +386,10 @@
         "details": "1.  Create the `examples/codex-basic/` directory. It should contain a minimal skill definition (e.g., a Claude `SKILL.md`).\n2.  Add a new script to `package.json` or a new CI job that runs `skill-porter universal` and then `skill-porter validate` on the `examples/codex-basic/` directory. This serves as the E2E test.\n3.  Write `docs/codex-support.md` detailing the `codex-plugin.toml` schema, the `convert` and `universal` commands, and troubleshooting tips.\n4.  Update the main `README.md` with a section on Codex CLI Support, linking to the detailed docs.",
         "testStrategy": "The primary validation is the successful execution of the new E2E test in the CI pipeline. A manual review of the generated documentation should be performed to ensure clarity, accuracy, and completeness. A link checker can be run on the documentation to catch broken links.",
         "priority": "medium",
-        "dependencies": [
-          9
-        ],
+        "dependencies": [9],
         "status": "pending",
+        "phase": 4,
+        "mvp": false,
         "subtasks": [
           {
             "id": 1,
@@ -442,9 +404,7 @@
             "id": 2,
             "title": "Implement E2E Test for Codex Universal Command in CI",
             "description": "Add a new script to `package.json` or create a new CI job that serves as an end-to-end test. This test will run `skill-porter universal` and then `skill-porter validate` on the `examples/codex-basic/` directory.",
-            "dependencies": [
-              1
-            ],
+            "dependencies": [1],
             "details": "Modify the primary CI configuration file or the project's `package.json`. The new CI job or script should first execute `skill-porter universal ./examples/codex-basic` and then `skill-porter validate` on the output directory. The job must fail if either command returns a non-zero exit code.",
             "status": "pending",
             "testStrategy": "The CI pipeline must pass after this change is merged. To confirm failure conditions, temporarily introduce an error into the example skill and verify that the new CI job fails as expected."
@@ -453,13 +413,92 @@
             "id": 3,
             "title": "Write Codex Support Documentation and Update README",
             "description": "Create the `docs/codex-support.md` file detailing the new functionality, and update the main `README.md` to include a section linking to this new documentation.",
-            "dependencies": [
-              1,
-              2
-            ],
+            "dependencies": [1, 2],
             "details": "Create the file `docs/codex-support.md`. It must document the `codex-plugin.toml` schema, the `convert` and `universal` commands, and provide troubleshooting tips. After that, edit the main `README.md` to add a new 'Codex CLI Support' section with a link to the detailed documentation.",
             "status": "pending",
             "testStrategy": "Perform a manual review of the generated documentation for clarity, accuracy, and completeness. Use an automated link checker to ensure the link from `README.md` to the new doc file is valid."
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Implement Codex-to-Claude Converter (Optional)",
+        "description": "Create a reverse converter that transforms a Codex plugin into equivalent Claude skill artifacts, enabling Codex-first skills to be reused in Claude.",
+        "details": "In `src/converters/codexToClaudeConverter.ts`, implement `convertCodexToClaude`. The logic should:\n1.  Read `codex/codex-plugin.toml`, `codex/CODEX_AGENTS.md`, and `codex/codex-config.snippet.toml`.\n2.  Parse the Codex manifest into a structured object using `spec/codexPluginSpec`.\n3.  Map plugin metadata back into `SKILL.md` frontmatter and `.claude-plugin/marketplace.json` fields.\n4.  Derive Claude `allowed-tools` and MCP configuration from Codex MCP servers and tool filters.\n5.  Generate SKILL markdown content using existing docs as input, inserting comments where heuristics are uncertain.\n6.  Write all generated Claude artifacts to the appropriate directories.",
+        "testStrategy": "Set up round-trip fixtures: start from a Claude skill, convert to Codex with the forward converter, then run Codex-to-Claude and validate the resulting artifacts with the existing Claude validator. Use golden tests for key files and assert validation passes or only shows expected minor differences.",
+        "priority": "low",
+        "dependencies": [4],
+        "status": "pending",
+        "phase": 5,
+        "mvp": false,
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Codex Plugin Reader for Reverse Conversion",
+            "description": "Implement logic to read and parse `codex-plugin.toml`, `CODEX_AGENTS.md`, and `codex-config.snippet.toml` into a unified in-memory representation suitable for reverse mapping.",
+            "dependencies": [],
+            "details": "Use `core/fs` to read the Codex files and `spec/codexPluginSpec` to parse the manifest. For docs and config, reuse TOML and markdown parsing utilities. Consolidate the data into a single context object for downstream mapping.",
+            "status": "pending",
+            "testStrategy": "Unit tests for missing/malformed files and happy-path parsing. Verify that all key manifest fields and MCP definitions are present in the resulting context object."
+          },
+          {
+            "id": 2,
+            "title": "Map Codex Context to Claude Manifest and MCP Config",
+            "description": "Map the parsed Codex context into Claude-specific manifest and MCP configuration structures.",
+            "dependencies": [1],
+            "details": "Implement a pure mapping function that takes the Codex context and produces Claude manifest structures, including `SKILL.md` frontmatter fields and MCP configuration blocks. Add comments or flags to denote areas where information cannot be reconstructed exactly.",
+            "status": "pending",
+            "testStrategy": "Unit tests feeding various Codex contexts (with and without MCP, with different tool filters) and asserting that the resulting Claude structures are consistent and usable."
+          },
+          {
+            "id": 3,
+            "title": "Write Claude Artifacts and Round-Trip Tests",
+            "description": "Write mapped Claude artifacts to disk and validate the round-trip Claude → Codex → Claude flow.",
+            "dependencies": [2],
+            "details": "Persist `SKILL.md` and any required `.claude` files. Build a round-trip test harness that starts from a Claude fixture, runs the forward converter, then the reverse converter, and compares key fields plus runs validation.",
+            "status": "pending",
+            "testStrategy": "Integration tests verifying that round-tripped Claude artifacts pass validation and that differences are limited to documented, expected deviations (e.g., formatting)."
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Implement Codex-to-Gemini Converter (Optional)",
+        "description": "Create a reverse converter that transforms a Codex plugin into a Gemini extension, enabling Codex-first skills to be reused in Gemini.",
+        "details": "In `src/converters/codexToGeminiConverter.ts`, implement `convertCodexToGemini`. The logic should:\n1.  Reuse the Codex plugin reader from the Codex-to-Claude work.\n2.  Map Codex manifest metadata into `gemini-extension.json` fields (`name`, `description`, `version`, etc.).\n3.  Convert Codex MCP server definitions into Gemini `mcpServers` entries.\n4.  Generate `GEMINI.md` usage docs from `CODEX_AGENTS.md`, stripping any Codex-only references.\n5.  Write `gemini-extension.json` and `GEMINI.md` to the target directory.",
+        "testStrategy": "Set up round-trip fixtures similar to the Claude reverse path: start from a Gemini extension, convert to Codex with the forward converter, then run Codex-to-Gemini and validate the resulting extension with the Gemini validator. Use golden tests and assert that validation passes for the regenerated extension.",
+        "priority": "low",
+        "dependencies": [4],
+        "status": "pending",
+        "phase": 5,
+        "mvp": false,
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Map Codex Context to Gemini Extension Manifest",
+            "description": "Implement a mapping from the shared Codex context (used by reverse converters) into a Gemini `gemini-extension.json` structure.",
+            "dependencies": [],
+            "details": "Define a pure function that takes Codex manifest + MCP context and returns a Gemini extension manifest, including `mcpServers` and capability fields. Handle missing information conservatively and document assumptions.",
+            "status": "pending",
+            "testStrategy": "Unit tests that feed varying Codex contexts and assert correct corresponding Gemini manifest structures, including behavior when MCP configuration is absent or partial."
+          },
+          {
+            "id": 2,
+            "title": "Generate GEMINI.md from CODEX_AGENTS.md",
+            "description": "Generate Gemini usage documentation by adapting `CODEX_AGENTS.md` content into `GEMINI.md`.",
+            "dependencies": [1],
+            "details": "Use the same markdown tooling stack as the Codex docs generator to transform `CODEX_AGENTS.md`. Strip Codex-specific instructions and insert Gemini CLI usage where appropriate.",
+            "status": "pending",
+            "testStrategy": "Snapshot tests comparing generated `GEMINI.md` documents against golden fixtures for multiple input Codex docs."
+          },
+          {
+            "id": 3,
+            "title": "Write Gemini Artifacts and Round-Trip Tests",
+            "description": "Write the Gemini extension artifacts to disk and validate the Gemini → Codex → Gemini round-trip.",
+            "dependencies": [2],
+            "details": "Persist `gemini-extension.json` and `GEMINI.md` and add a round-trip harness that starts from a Gemini fixture, runs the forward converter to Codex, then the reverse converter back to Gemini, and validates the result.",
+            "status": "pending",
+            "testStrategy": "Integration tests verifying that the regenerated Gemini extension passes validation and that any differences are limited to documented, non-breaking changes such as formatting."
           }
         ]
       }
