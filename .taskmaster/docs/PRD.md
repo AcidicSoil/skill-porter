@@ -1,1286 +1,1016 @@
-# PRD
+1. Overview
+   ===========
 
-## 1. Overview
+Problem Statement
+The existing `convert-all-skills.sh` script provides a gum-based interactive flow to recursively discover skills and invoke `skill-porter convert`, but the UX is linear, text-heavy, and lacks a coherent TUI layout, progress overview, or easy error inspection. It is difficult to see all skills, their statuses, and results in one place, and the behavior is tied tightly to interactive shell prompts.
 
----
+Target Users
 
-### Problem Statement
+* Internal maintainers of the `skill-porter` tool who frequently convert many skills between Claude and Gemini formats.
+* External advanced users working with large trees of skills/extensions who need repeatable, inspectable conversion runs.
+* CI / tooling authors who may later want to script or wrap the TUI for semi-automated batch conversions.
 
-The current `convert-all-skills.sh` script discovers skill directories (containing `SKILL.md` or `gemini-extension.json`), prompts the user with gum, and invokes `skill-porter convert` one skill at a time. It is functional but linear and text-heavy: there is no structured overview of all discovered skills, no at-a-glance status dashboard, and limited ability to manage per-skill actions once a run starts.
+Success Metrics
 
-This makes multi-skill/multi-target conversion runs harder to reason about, slower to operate, and more error-prone, especially when dealing with dozens or hundreds of skills.
-
-### Target Users
-
-* **Skill authors / maintainers**
-
-  * Maintain collections of skills organized in directory trees.
-  * Need to convert or re-convert entire trees after changes in targets or schemas.
-  * Want fast, visible feedback when something fails and the ability to selectively retry.
-
-* **Toolchain maintainers / infra engineers**
-
-  * Need a more maintainable, testable conversion orchestration layer than a single interactive bash script.
-  * Need a clear separation of concerns (discovery, orchestration, UI) and testable modules.
-
-### Why existing solutions fail
-
-* `convert-all-skills.sh` mixes:
-
-  * User interaction (gum prompts/spinners),
-  * Discovery (`find` + de-dup),
-  * Orchestration (per-skill control flow, AUTO_CONVERT_MODE),
-  * Reporting (summary).
-* The flow is strictly linear and log-oriented; you cannot:
-
-  * See all discovered skills and their status at once.
-  * Navigate between skills to inspect details or errors.
-  * Change strategy mid-run with clear visual feedback.
-* The script is not easily consumed by other tools: no JSON/structured status API; behavior is encoded in shell control flow.
-
-### Success Metrics
-
-* 100% feature parity with existing bash workflow for:
-
-  * Root selection, recursive vs single-skill mode, target selection, per-skill decision, summary counters (success/skipped/failed).
-* User can complete an end-to-end multi-skill conversion from a single `skill-porter-tui` binary without needing the script, while `convert-all-skills.sh` remains fully usable standalone (no regressions).
-* Users can:
-
-  * See a list of all discovered skills with per-skill status.
-  * Convert/skip individual skills and see live updates.
-  * Identify failed skills in one glance and inspect error messages.
-* Codebase:
-
-  * No “god modules”; each module has a single responsibility and is testable in isolation.
-  * Unit tests cover ≥80% of non-UI domain logic (discovery, command building, state transitions).
-
----
+* Functional parity: all flows supported by `convert-all-skills.sh` (recursive vs single, per-skill target selection, auto-convert remaining, skip, quit, summary) are available or clearly replaced by equivalent TUI flows.
+* UX improvement: users can see a structured list of discovered skills, each with status (pending, running, success, skipped, failed), and a persistent summary bar (success/skipped/failed/total).
+* Reliability: conversion failure modes are clearly surfaced per-skill (exit codes and error snippets) and via process exit code (non-zero if any failures).
+* Adoption: for internal workflows, the TUI becomes the default interactive entrypoint; the existing script remains usable and unchanged in surface area.
+* Quality: no “god modules,” no ad-hoc “utils,” clear module boundaries, and code structured for long-term maintenance.
 
 2. Capability Tree (Functional Decomposition)
+   =============================================
 
----
+### Capability: Configuration & Startup
 
-### Capability: Configuration & Session Setup
+Covers how users launch the TUI, set scan parameters, and wire flags/env into the application model.
 
-High-level: gather and manage configuration for a conversion session (scan root, recursive mode, default target, output base directory, and CLI overrides).
+#### Feature: CLI Flag and Environment Parsing [MVP]
 
-#### Feature: Configuration model and defaults (MVP)
-
-* **Description**: Represent and store all configuration needed to run a conversion session with sensible defaults.
-* **Inputs**:
-
-  * CLI flags/env vars (`--root`, `--recursive/--no-recursive`, `--target`, `--out-base`).
-  * Implicit defaults (e.g., `./skills`, `./converted-<target>-skills`).
-* **Outputs**:
-
-  * Immutable `Config` struct used by discovery and conversion modules.
+* **Description**: Parse CLI flags and environment variables into a validated configuration struct for the TUI.
+* **Inputs**: Command-line args (`--root`, `--recursive/--no-recursive`, `--target`, `--out-base`), environment variables (e.g. `SKILL_PORTER_ROOT`, `SKILL_PORTER_TARGET`).
+* **Outputs**: `AppConfig` struct with fields: `ScanRoot`, `RecursiveMode`, `DefaultTarget`, `OutBaseDir`, `AutoConvertMode` (off by default).
 * **Behavior**:
 
-  * On startup, read CLI flags/env vars.
-  * Apply defaults when values are not supplied.
-  * Validate paths/values; on invalid, return errors with clear messages.
-  * Provide a snapshot used to seed the TUI model.
+  * Merge env defaults, CLI flags, and internal defaults (`./skills`, `gemini` target, `./converted-<target>-skills`) using the same defaults as `convert-all-skills.sh`.
+  * Validate directories and normalize paths (absolute or clean relative).
+  * On validation error, print clear error and exit with non-zero code.
 
-#### Feature: In-TUI configuration editing (post-MVP)
+#### Feature: Initial Configuration Screen [MVP]
 
-* **Description**: Allow users to change configuration (root, recursive mode, default target, output base) from within the TUI before discovery runs.
-* **Inputs**:
-
-  * Current `Config`.
-  * User keyboard input in TUI.
-* **Outputs**:
-
-  * Updated `Config` instance and corresponding `ConfigUpdatedMsg`.
+* **Description**: Bubble Tea screen to confirm or adjust initial configuration before scanning.
+* **Inputs**: `AppConfig` from flag/env parsing.
+* **Outputs**: Possibly-updated `AppConfig` (e.g. user edits scan root, toggles recursive flag, selects default target, changes output base).
 * **Behavior**:
 
-  * Provide a focused “configuration view” or inline controls.
-  * On change, validate and update model; invalid values show inline errors.
-  * Optionally trigger re-discovery if config changes after skills have been loaded.
+  * Render header with title and brief context (“Skill Porter Conversion”).
+  * Render editable fields: scan root, recursive yes/no, default target (Gemini/Claude), output base dir.
+  * Provide key hints for editing (e.g. `Tab` to move fields, `Enter` to accept).
+  * Confirm configuration before triggering discovery; on cancel, exit cleanly.
 
----
+#### Feature: Configuration Persistence (Optional / non-MVP)
 
-### Capability: Skill Discovery & Modeling
-
-High-level: find skill directories and represent them as domain entities.
-
-#### Feature: Recursive skill discovery (MVP)
-
-* **Description**: Discover skill directories under a root, matching the bash script semantics.
-* **Inputs**:
-
-  * `Config.ScanRoot`.
-  * `Config.RecursiveMode` (bool).
-  * File system (presence of `SKILL.md` or `gemini-extension.json` in directories).
-* **Outputs**:
-
-  * `[]SkillDir` list where each `SkillDir` has:
-
-    * `Path` (absolute or normalized),
-    * `Name` (basename),
-    * `HasSKILL`, `HasGeminiExtension`.
-  * `SkillsDiscoveredMsg` to Bubble Tea.
+* **Description**: Optional ability to persist last-used configuration to a small config file.
+* **Inputs**: Final `AppConfig` at end of a successful run.
+* **Outputs**: On-disk config file (e.g. `$XDG_CONFIG_HOME/skill-porter-tui/config.json`), plus persisted defaults on next run.
 * **Behavior**:
 
-  * If recursive: walk directories under root, find files matching `SKILL.md` or `gemini-extension.json`, then de-duplicate by directory, matching `SEEN_DIRS` semantics.
-  * If non-recursive: treat the root as a single candidate and check for skill files.
-  * Sort results by path or name for stable display.
-  * If none found, emit an empty message and a model state that reflects “no skills found”.
+  * On startup, attempt to load previous config; fall back to built-in defaults if missing/invalid.
+  * Never block startup on config errors; log and continue with defaults.
 
-#### Feature: Skill domain model and status (MVP)
+### Capability: Skill Discovery
 
-* **Description**: Represent each discovered skill, its selected target, status, and error state.
-* **Inputs**:
+Covers finding skill directories under a root, matching the semantics of `convert-all-skills.sh`.
 
-  * `[]SkillDir` from discovery.
-  * Conversion actions invoked by user.
-  * Conversion results (exit code, stderr/stdout).
-* **Outputs**:
+#### Feature: Recursive Skill Discovery [MVP]
 
-  * `SkillState` per skill:
-
-    * `Status` (pending, running, success, skipped, failed).
-    * `SelectedTarget`.
-    * `OutputPath`.
-    * `LastErrorMessage` (optional).
-  * Aggregate `Summary` (success, skipped, failed, total).
+* **Description**: Recursively scan a root directory for skill directories containing `SKILL.md` or `gemini-extension.json`.
+* **Inputs**: `ScanRoot` (directory), `RecursiveMode` (bool).
+* **Outputs**: List of `SkillDir` records: `{ Path, Name, HasSkillMd, HasGeminiManifest }`.
 * **Behavior**:
 
-  * Initialize statuses to `pending`.
-  * Update statuses and counters as conversions complete.
-  * Provide derived summary at all times.
+  * If `RecursiveMode = true`, walk directories and collect files whose names are `SKILL.md` or `gemini-extension.json`, de-duplicating by directory like the existing `SEEN_DIRS` logic.
+  * If `RecursiveMode = false`, treat `ScanRoot` as a single candidate directory and check for the same files.
+  * If no skills found, surface a TUI message and allow user to change configuration or exit.
+  * Emit a Bubble Tea message `SkillsDiscoveredMsg` containing the list.
 
-#### Feature: Rescan / refresh (post-MVP)
+#### Feature: Skill Metadata Extraction [MVP]
 
-* **Description**: Allow user to rescan the tree without restarting the binary.
-* **Inputs**:
-
-  * Current `Config`.
-  * User “rescan” action.
-* **Outputs**:
-
-  * Recomputed `[]SkillDir` and corresponding `SkillsDiscoveredMsg`.
+* **Description**: Augment `SkillDir` records with basic metadata for display.
+* **Inputs**: List of `SkillDir` paths.
+* **Outputs**: Enhanced `SkillDir` with derived display name (directory basename) and platform type (Claude/Gemini/Universal/Unknown) using existing Node detector semantics as reference.
 * **Behavior**:
 
-  * Re-run discovery and replace the model’s skills list and summary.
-  * Optionally preserve error history in a separate log.
-
----
+  * Infer name as directory basename.
+  * Optionally (non-blocking), shell out to `skill-porter analyze` or reuse detection logic via a small utility to identify platform type and confidence.
+  * Ensure failures in metadata detection don’t block listing; mark platform as Unknown on error.
 
 ### Capability: Conversion Orchestration
 
-High-level: orchestrate calls to `skill-porter convert` for selected skills, track progress, and handle errors, using the bash script as behavioral reference.
+Covers scheduling and executing conversions using `skill-porter convert`, tracking per-skill status, and computing summaries.
 
-#### Feature: Command building and process execution (MVP)
+#### Feature: Conversion Command Builder [MVP]
 
-* **Description**: Build and run `skill-porter convert` commands for a given skill, target, and output base.
-* **Inputs**:
-
-  * `SkillDir.Path`, `SkillDir.Name`.
-  * Target (`gemini`, `claude`, future).
-  * `Config.OutBaseDir`.
-* **Outputs**:
-
-  * OS commands (`exec.Cmd` or equivalent).
-  * `SkillConvertedMsg` with success/failure and error details.
+* **Description**: Build the exact `skill-porter convert` command for a given skill, target, and output base.
+* **Inputs**: `SkillDir.Path`, `targetPlatform` (`gemini` or `claude`), `OutBaseDir`, optional flags (`--no-validate` etc).
+* **Outputs**: Struct representing command invocation: `{ Cmd: "skill-porter", Args: ["convert", path, "--to", target, "--output", outPath, ...] }`.
 * **Behavior**:
 
-  * Build output directory as `${OutBaseDir}/${name}-${target}` consistent with script.
-  * Ensure output directory exists before invoking.
-  * Execute `skill-porter convert "<path>" --to "<target>" --output "<out>"`.
-  * Capture exit code and stderr.
-  * Map exit code 0 → success; non-zero → failed with message.
-  * Surface missing `skill-porter` as a pre-check error, mirroring script behavior.
+  * Compose output directory as `${OutBaseDir}/${Name}-${target}` as in the script.
+  * Support optional settings (e.g. validate on/off) via config.
+  * Provide a pure function usable by tests.
 
-#### Feature: Per-skill action selection (MVP)
+#### Feature: Conversion Execution Engine [MVP]
 
-* **Description**: Choose, per skill, what action to take, equivalent to bash/gum choices.
-* **Inputs**:
-
-  * User keypress (`c`, `g`, `a`, `s`, etc.).
-  * Current `SkillState`.
-  * `Config.DefaultTarget`.
+* **Description**: Execute conversions sequentially (for MVP) and update skill statuses in the model.
+* **Inputs**: Command spec from Command Builder, skill identifier, target, current summary counts.
 * **Outputs**:
 
-  * `StartConversionMsg` (with skill id + chosen target) or `SkipSkill` side-effect.
+  * `SkillConvertedMsg` on success (status: `success`, outputPath).
+  * `ConversionErrorMsg` on failure (status: `failed`, error summary, exit code).
+  * Updated summary counters (success/skipped/failed).
 * **Behavior**:
 
-  * Map keys:
+  * Start conversions in a Go goroutine to avoid blocking the Bubble Tea event loop.
+  * Capture stdout/stderr for error context (trim to reasonable length for UI).
+  * Determine success from exit code (`0` → success; non-zero → failure).
+  * For MVP, run conversions one at a time; later phases may add bounded concurrency.
 
-    * `c`: convert with default target,
-    * `g`: convert as gemini,
-    * `a`: convert as claude,
-    * `s`: skip,
-    * `q`: quit,
-    * optional: `A`: auto-convert remaining with current target (AUTO_CONVERT_MODE analog).
-  * Prevent starting conversion if skill is already `running` or `success`.
-  * If skip: set status `skipped`, update summary.
+#### Feature: Summary Aggregation & Exit Semantics [MVP]
 
-#### Feature: AUTO_CONVERT_MODE equivalent (post-MVP)
-
-* **Description**: Provide a mode to auto-convert remaining skills with a selected target, matching script’s “Convert ALL remaining” behavior.
-* **Inputs**:
-
-  * User action enabling auto mode.
-  * List of skills with status `pending`.
-* **Outputs**:
-
-  * Batched `StartConversionMsg` events for remaining skills (likely sequentially).
+* **Description**: Maintain counters mirroring the Bash script (success, skipped, failed, found) and map them to exit codes.
+* **Inputs**: Stream of per-skill status changes.
+* **Outputs**: Summary struct `{ Succeeded, Skipped, Failed, Total }`, plus final program exit code.
 * **Behavior**:
 
-  * Set a session-level `AutoConvertEnabled` + `AutoTarget`.
-  * As the user advances selection or triggers “convert next pending”, automatically run conversions without separate confirmation.
-
----
+  * Increment counters on state transitions to `success`, `skipped`, `failed`.
+  * Render summary in footer and final “Summary” panel.
+  * On exit, return non-zero exit code if `Failed > 0`; zero otherwise.
+  * Support early exit with partial summary when user chooses to quit.
 
 ### Capability: TUI Presentation & Interaction
 
-High-level: provide a Bubble Tea-based TUI with Lip Gloss styling, representing state and managing interactions.
+Bubble Tea model/view/update logic with Lip Gloss styling.
 
-#### Feature: Main list + detail layout (MVP)
+#### Feature: Skill List View with Statuses [MVP]
 
-* **Description**: Display discovered skills in a scrollable list with a detail panel and header/footer.
-* **Inputs**:
-
-  * Current list of `SkillState`.
-  * Current selection index.
-  * `Summary` data.
-  * `Config` snapshot.
-* **Outputs**:
-
-  * Bubble Tea `View` rendering:
-
-    * Header (title + config snapshot),
-    * Main panel (list of skills with status),
-    * Detail panel (selected skill info),
-    * Footer (summary and key hints).
+* **Description**: Main panel listing discovered skills with per-skill status.
+* **Inputs**: List of `SkillDir` and each skill’s `ConversionStatus` (`pending`, `running`, `success`, `skipped`, `failed`).
+* **Outputs**: Rendered Bubble Tea view (rows with name, platform, status glyph).
 * **Behavior**:
 
-  * Render per-skill rows with:
+  * Use Lip Gloss to style rows (borders, padding, colors per status).
+  * Support scrolling for large lists; visual pointer for selected row.
+  * Mark running conversions distinctly (e.g. spinner or special glyph).
+  * Reflect updates in near-real-time as conversion messages arrive.
 
-    * Name,
-    * Status icon (pending/running/success/skipped/failed),
-    * Selected target.
-  * Detail panel shows path, output directory, last error snippet.
-  * Footer shows `Succeeded / Skipped / Failed / Total`.
+#### Feature: Skill Detail Panel [MVP]
 
-#### Feature: Keyboard navigation and commands (MVP)
-
-* **Description**: Provide intuitive keyboard controls for navigating skills and triggering actions.
-* **Inputs**:
-
-  * Keyboard events (↑/↓, `j/k`, `c/g/a/s/q/r`).
-  * Current selection and state.
-* **Outputs**:
-
-  * Bubble Tea messages updating selection or triggering domain actions (`StartConversionMsg`, `SkipSkill`, `RescanRequestedMsg`).
+* **Description**: Secondary panel showing details for the selected skill.
+* **Inputs**: Selected `SkillDir`, latest conversion result (output path, exit code, last error line).
+* **Outputs**: Detail panel view for Bubble Tea.
 * **Behavior**:
 
-  * Up/down/j/k move selection within bounds.
-  * Conversion keys operate on selected skill.
-  * `q` triggers quit flow (may confirm if there are pending skills).
-  * `r` rescans using current `Config`.
+  * Show path, detected platform, default target, last operation (with timestamp or simple label), last error snippet if failed, and output directory.
+  * Update as new conversion completes for this skill.
+  * Provide enough info for user to re-run conversion manually if needed.
 
-#### Feature: Theming and styling with Lip Gloss (MVP)
+#### Feature: Footer Status & Key Hints [MVP]
 
-* **Description**: Apply consistent color, padding, borders, and typography-like spacing.
-* **Inputs**:
-
-  * Theme configuration (constants for colors/styles).
-  * Current UI state (e.g., status for color choice).
-* **Outputs**:
-
-  * Styled header, list rows, selection highlight, error messages.
+* **Description**: Footer strip with live progress and keybindings.
+* **Inputs**: Summary counts, current operation, available actions in current state.
+* **Outputs**: Single-line footer view.
 * **Behavior**:
 
-  * Use Lip Gloss to define:
+  * Display “Pending: X | Running: Y | Success: Z | Skipped: S | Failed: F”.
+  * Show key hints (`↑/↓` or `j/k` to move, `c` convert, `g` gemini, `a` claude, `s` skip, `q` quit, `r` rescan).
+  * Fade or disable hints when actions are not applicable (e.g. no skills loaded).
 
-    * Header style (bold, inverted or accent color).
-    * Panel borders and margins.
-    * Row styles for different statuses (success/failed/skipped/pending).
-  * Ensure layout degrades reasonably on narrow terminals.
+#### Feature: Keyboard Action Handling & Mode Management [MVP]
 
-#### Feature: Summary / completion view (MVP)
-
-* **Description**: Provide a clear summary after all conversions are done or user quits early.
-* **Inputs**:
-
-  * `Summary`.
-  * List of failed skills (names + errors).
-* **Outputs**:
-
-  * End-of-run summary view with counts and a short list of failed skills.
-  * Final exit code (0 if no failures, non-zero otherwise).
+* **Description**: Map key presses to per-skill actions and app-level commands.
+* **Inputs**: Key events from Bubble Tea, current selection, config, model state (pending/running/summary).
+* **Outputs**: State transitions: start conversion, mark skip, set auto-convert mode, toggle recursive, quit, rescan.
 * **Behavior**:
 
-  * When all skills are non-pending or user chooses to end: show focused summary.
-  * Exit code policy: non-zero if `failed > 0`, mirroring script semantics.
+  * `c`: convert selected skill with current default target.
+  * `g` / `a`: convert selected skill as gemini/claude, overriding default.
+  * `s`: mark selected skill as skipped; increment skipped counter.
+  * `r`: re-run discovery with same config; reset statuses and summary.
+  * `q`: if any pending conversions, ask for confirmation (see gum interop); otherwise exit.
+  * Implement an “auto-convert remaining” mode equivalent to the script’s “Convert ALL remaining (target=<target>)”.
 
----
+### Capability: Gum Interoperability
 
-### Capability: Gum Interoperability (Optional)
+Use gum where it still adds UX value.
 
-#### Feature: Gum-driven confirmations (post-MVP)
+#### Feature: Confirmation Prompts via Gum [Non-MVP, optional]
 
-* **Description**: For specific one-off confirmations, optionally shell out to gum instead of building full custom TUI prompts.
-* **Inputs**:
-
-  * Requests from app (e.g., “confirm quit with N pending skills”).
-* **Outputs**:
-
-  * Boolean decisions.
+* **Description**: Integrate gum CLI prompts for certain disruptive confirms (quit with pending, bulk operations), while primary UX stays in Bubble Tea.
+* **Inputs**: Confirmation intents (e.g. “Quit while 5 skills are still pending?”).
+* **Outputs**: Boolean decision from gum, mapped back into the Bubble Tea model.
 * **Behavior**:
 
-  * Execute `gum confirm` with appropriate title and parse exit code.
-  * Only used where it simplifies implementation and does not conflict with Bubble Tea event loop.
+  * Spawn `gum confirm` in a separate process when user triggers a destructive action from TUI.
+  * Pause Bubble Tea interaction while gum prompt is active; resume after completion.
+  * If gum is unavailable, fall back to internal TUI confirmation dialog.
 
----
+### Capability: Logging & Diagnostics
 
-### Capability: Error Handling, Logging, and Diagnostics
+#### Feature: Structured Logging [MVP]
 
-#### Feature: Error mapping and surfacing (MVP)
-
-* **Description**: Map process-level and domain-level errors into user-visible messages.
-* **Inputs**:
-
-  * Process exit codes and stderr from `skill-porter`.
-  * Discovery errors (e.g., unreadable directories).
-* **Outputs**:
-
-  * `ConversionErrorMsg` / diagnostics stored in `SkillState.LastErrorMessage`.
-  * Log lines to stderr when appropriate.
+* **Description**: Emit minimal structured logs for conversions for debugging and CI usage.
+* **Inputs**: Conversion start/finish events, errors, configuration.
+* **Outputs**: Lines written to stderr or dedicated log stream (e.g. JSONL or tagged text).
 * **Behavior**:
 
-  * For unexpected failures (missing `skill-porter`, permission issues), show a global error banner and abort if necessary (matching script for missing `skill-porter` and `gum`).
-  * For per-skill failures, record error snippets and highlight failed rows.
+  * Log at least: skill path, target, output dir, status, exit code, duration.
+  * Keep logging minimal and machine-parseable; no TUI control sequences.
 
----
+#### Feature: Debug Mode [Non-MVP]
 
-### Capability: Documentation & Developer Support
-
-#### Feature: User documentation (MVP)
-
-* **Description**: Document usage, flags, and interaction model.
-* **Inputs**:
-
-  * Final behavior of TUI.
-* **Outputs**:
-
-  * `docs/skill-porter-tui.md`.
-  * README snippet.
-  * Task plan doc `docs/tasks/todo/01-gum-wrapper-for-skill-porter.md`.
+* **Description**: Provide `--debug` flag to increase verbosity for troubleshooting.
+* **Inputs**: CLI `--debug`, internal errors.
+* **Outputs**: Additional log lines (e.g. raw `skill-porter` command, env info), optional on-screen debug panel.
 * **Behavior**:
 
-  * Describe installation, flags, UI, and relation to `convert-all-skills.sh`.
-  * Include examples for common workflows.
+  * When `--debug` is set, include full command and working directory in logs.
+  * Never leak secrets (no environment dumps containing credentials).
 
----
-
-3. Repository Structure + Module Definitions (Structural Decomposition)
-
----
+3. Repository Structure + Module Definitions
+   ===========================================
 
 Assumptions:
 
-* Go-based TUI with Bubble Tea + Lip Gloss.
-* Feature-oriented, no god modules; each file has one primary responsibility.
+* Go module lives at the repo root or under a new `tui/` subdirectory.
+* We follow “one file = one primary responsibility” and avoid cross-layer mixing.
 
-### Proposed Repository Structure (new code)
+### Repository Structure (new/changed parts only)
 
 ```text
 project-root/
-  cmd/
-    skill-porter-tui/
-      main.go
-
-  internal/
-    skillporter/
-      config/
-        config.go
-        flags.go
-      domain/
-        types.go
-        status.go
-        summary.go
-      discovery/
-        discovery.go
-      convert/
-        command_builder.go
-        runner.go
-      tui/
-        model/
-          model.go
-          messages.go
-          update.go
-        view/
-          layout.go
-          list_view.go
-          detail_view.go
-          summary_view.go
-        theme/
-          theme.go
-          status_styles.go
-        keys/
-          keys.go
-      errors/
-        errors.go
-
-  docs/
-    skill-porter-tui.md
-    tasks/
-      todo/
-        01-gum-wrapper-for-skill-porter.md
-
-  scripts/
-    convert-all-skills.sh  # existing, unchanged :contentReference[oaicite:22]{index=22}
-
-  internal_tests/
-    skillporter/
-      discovery_test.go
-      convert_command_builder_test.go
-      model_update_test.go
-      config_flags_test.go
+├── cmd/
+│   └── skill-porter-tui/
+│       └── main.go                    # Entry point (CLI + Bubble Tea bootstrap)
+├── internal/
+│   └── skillportertui/
+│       ├── config/
+│       │   ├── config.go              # AppConfig type, defaults, validation
+│       │   └── flags.go               # CLI/env parsing → AppConfig
+│       ├── domain/
+│       │   ├── types.go               # SkillDir, ConversionStatus, Summary, enums
+│       │   └── messages.go            # Bubble Tea message types
+│       ├── discovery/
+│       │   ├── discovery.go           # Recursive/single-skill scanning
+│       │   └── discovery_test.go
+│       ├── conversion/
+│       │   ├── command_builder.go     # Build skill-porter CLI commands
+│       │   ├── executor.go            # Run commands, capture output
+│       │   └── conversion_test.go
+│       ├── ui/
+│       │   ├── model.go               # Bubble Tea model state + Update
+│       │   ├── view.go                # Bubble Tea views (list, detail, footer)
+│       │   ├── keymap.go              # Keybindings definitions
+│       │   ├── theme.go               # Lip Gloss styles
+│       │   └── ui_test.go
+│       ├── guminterop/
+│       │   └── confirm.go             # Optional gum-based confirms
+│       └── logging/
+│           └── logger.go              # Structured logging helpers
+├── docs/
+│   ├── skill-porter-tui.md            # Usage, flags, screenshots (new)
+│   └── tasks/
+│       └── todo/
+│           └── 01-gum-wrapper-for-skill-porter.md  # This plan/PRD
+└── scripts/
+    └── convert-all-skills.sh          # Existing script, unchanged surface area
 ```
 
 ### Module Definitions
 
-#### Module: `cmd/skill-porter-tui`
+#### Module: `internal/skillportertui/config`
 
-* **Maps to capability**: Configuration & Session Setup; TUI bootstrapping.
-* **Responsibility**: CLI entry point; parse flags, construct `Config`, instantiate and run TUI program.
+* **Maps to capability**: Configuration & Startup.
+* **Responsibility**: Define configuration schema and translate flags/env into `AppConfig`.
 * **File structure**:
 
-  * `main.go`
+  ```text
+  config/
+  ├── config.go   # AppConfig definition, defaults, validation functions
+  └── flags.go    # CLI/env parsing using `flag` or similar
+  ```
+
 * **Exports**:
 
-  * Binary `skill-porter-tui` (no exported Go symbols).
+  * `type AppConfig` – holds `ScanRoot`, `RecursiveMode`, `DefaultTarget`, `OutBaseDir`, `AutoConvertMode`.
+  * `func DefaultConfig() AppConfig` – produces defaults.
+  * `func LoadFromFlagsAndEnv() (AppConfig, error)` – parse flags/env into config.
+  * `func Validate(AppConfig) error` – ensures directories/targets are valid.
 
-#### Module: `internal/skillporter/config`
+#### Module: `internal/skillportertui/domain`
 
-* **Maps to capability**: Configuration & Session Setup.
-* **Responsibility**: Parse command-line flags/env; create and validate `Config`.
-* **Files**:
+* **Maps to capability**: Skill Discovery, Conversion Orchestration, TUI Presentation.
+* **Responsibility**: Core domain types and Bubble Tea messages.
+* **File structure**:
 
-  * `config.go`: defines `Config` struct, validation logic, default computation.
-  * `flags.go`: wires Go flag parsing into `Config`.
+  ```text
+  domain/
+  ├── types.go     # SkillDir, ConversionStatus, Summary, ConversionTarget
+  └── messages.go  # Bubble Tea message types and constructors
+  ```
+
 * **Exports**:
 
-  * `type Config struct { ... }`
-  * `func NewConfigFromFlags() (Config, error)`
-  * `func WithDefaults(Config) Config`
+  * `type SkillDir` – `{ Path, Name, HasSkillMd, HasGeminiManifest, Platform }`.
+  * `type ConversionTarget` – enum-like (`Gemini`, `Claude`).
+  * `type ConversionStatus` – enum-like (`Pending`, `Running`, `Success`, `Skipped`, `Failed`).
+  * `type Summary` – counters struct.
+  * `type SkillsDiscoveredMsg`, `SkillConvertedMsg`, `ConversionErrorMsg`, `ConfigUpdatedMsg`, `QuitMsg`.
 
-#### Module: `internal/skillporter/domain`
+#### Module: `internal/skillportertui/discovery`
 
-* **Maps to capability**: Skill Discovery & Modeling.
-* **Responsibility**: Define domain types and status enums.
-* **Files**:
+* **Maps to capability**: Skill Discovery.
+* **Responsibility**: Scan filesystem for skills.
+* **File structure**:
 
-  * `types.go`: `SkillDir`, `ConversionTarget`, identifiers.
-  * `status.go`: `ConversionStatus` enum and helpers.
-  * `summary.go`: `Summary` struct and aggregation helpers.
+  ```text
+  discovery/
+  ├── discovery.go
+  └── discovery_test.go
+  ```
+
 * **Exports**:
 
-  * `type SkillDir struct { Path, Name string; HasSKILL, HasGeminiExtension bool }`
-  * `type ConversionTarget string`
-  * `type ConversionStatus string`
-  * `type Summary struct { Success, Skipped, Failed, Total int }`
-  * Helper functions like `func NewSummaryFromStates([]SkillState) Summary`.
+  * `func DiscoverSkills(root string, recursive bool) ([]domain.SkillDir, error)` – core scanning function.
+  * `func EnhanceWithMetadata([]domain.SkillDir) []domain.SkillDir` – optional platform detection hook.
 
-#### Module: `internal/skillporter/discovery`
+#### Module: `internal/skillportertui/conversion`
 
-* **Maps to capability**: Skill Discovery & Modeling.
-* **Responsibility**: Implement filesystem discovery consistent with `convert-all-skills.sh`.
-* **Files**:
+* **Maps to capability**: Conversion Orchestration, Logging & Diagnostics.
+* **Responsibility**: Build and execute `skill-porter` conversions, emitting domain messages.
+* **File structure**:
 
-  * `discovery.go`
+  ```text
+  conversion/
+  ├── command_builder.go
+  ├── executor.go
+  └── conversion_test.go
+  ```
+
 * **Exports**:
 
-  * `func DiscoverSkills(cfg Config) ([]SkillDir, error)`
-* **Behavior notes**:
+  * `func BuildConvertCommand(skill domain.SkillDir, target domain.ConversionTarget, outBase string) (cmd string, args []string, outDir string)` – pure builder.
+  * `func ExecuteConversion(cmd string, args []string) (exitCode int, stdout, stderr string, err error)` – process execution.
+  * `func StartConversionAsync(...)` – orchestration helper that wraps `ExecuteConversion` and sends Bubble Tea messages via a channel or callback.
 
-  * Handles recursive vs single mode and directory de-duplication.
-
-#### Module: `internal/skillporter/convert`
-
-* **Maps to capability**: Conversion Orchestration.
-* **Responsibility**: Build and run `skill-porter convert` commands.
-* **Files**:
-
-  * `command_builder.go`: pure functions for constructing command + args + output path.
-  * `runner.go`: executes commands and returns structured result.
-* **Exports**:
-
-  * `type ConversionRequest struct { Skill SkillDir; Target ConversionTarget; OutBase string }`
-  * `type ConversionResult struct { Skill SkillDir; Target ConversionTarget; OutputPath string; Err error }`
-  * `func BuildCommand(req ConversionRequest) (name string, args []string, outDir string, err error)`
-  * `func RunConversion(ctx context.Context, req ConversionRequest) ConversionResult`
-
-#### Module: `internal/skillporter/tui/model`
+#### Module: `internal/skillportertui/ui`
 
 * **Maps to capability**: TUI Presentation & Interaction.
-* **Responsibility**: Bubble Tea model/state and update loop.
-* **Files**:
+* **Responsibility**: Bubble Tea model, update, and views; Lip Gloss theming; keybindings.
+* **File structure**:
 
-  * `model.go`: defines `Model` struct (skills slice, config, selection, summary).
-  * `messages.go`: Go types for Bubble Tea messages (`ConfigUpdatedMsg`, `SkillsDiscoveredMsg`, `StartConversionMsg`, `SkillConvertedMsg`, `ConversionErrorMsg`, `SummaryUpdatedMsg`, `QuitMsg`).
-  * `update.go`: `Update` function implementing Bubble Tea update pattern.
+  ```text
+  ui/
+  ├── model.go    # Bubble Tea Model, Init, Update
+  ├── view.go     # View composition: header, list, detail, footer
+  ├── keymap.go   # Key → action mapping
+  ├── theme.go    # Lip Gloss styles
+  └── ui_test.go
+  ```
+
 * **Exports**:
 
-  * `type Model struct { ... }`
-  * `func NewModel(cfg Config) Model`
-  * Message types.
-  * `func (m Model) Init() tea.Cmd`
-  * `func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd)`
+  * `type Model` – holds config, skills, selection index, statuses, summary.
+  * `func NewModel(config AppConfig) Model` – constructor.
+  * `func (m Model) Init() tea.Cmd` – discovery kick-off.
+  * `func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd)` – state transitions.
+  * `func (m Model) View() string` – TUI rendering.
+  * `var KeyMap` – central keybinding definition.
 
-#### Module: `internal/skillporter/tui/view`
+#### Module: `internal/skillportertui/guminterop`
 
-* **Maps to capability**: TUI Presentation & Interaction.
-* **Responsibility**: Render layout, list, detail, and summary views as strings.
-* **Files**:
+* **Maps to capability**: Gum Interoperability.
+* **Responsibility**: Optional bridging to gum for confirmation prompts.
+* **File structure**:
 
-  * `layout.go`: orchestrates header/main/detail/footer composition.
-  * `list_view.go`: renders skill list.
-  * `detail_view.go`: renders selected skill detail.
-  * `summary_view.go`: renders completion summary.
+  ```text
+  guminterop/
+  └── confirm.go
+  ```
+
 * **Exports**:
 
-  * `func View(m Model) string`
-  * Internal helpers for tests (e.g., `renderList`, `renderSummary`).
+  * `func ConfirmWithGum(prompt string) (bool, error)` – run `gum confirm` if available; fallback logic if not.
 
-#### Module: `internal/skillporter/tui/theme`
+#### Module: `internal/skillportertui/logging`
 
-* **Maps to capability**: TUI Presentation & Interaction (Theming).
-* **Responsibility**: Define Lip Gloss styles and status-based styling.
-* **Files**:
+* **Maps to capability**: Logging & Diagnostics.
+* **Responsibility**: Minimal structured logging API.
+* **File structure**:
 
-  * `theme.go`: global theme (colors, borders, padding).
-  * `status_styles.go`: style mapping for statuses.
+  ```text
+  logging/
+  └── logger.go
+  ```
+
 * **Exports**:
 
-  * `type Theme struct { ... }`
-  * `func DefaultTheme() Theme`
-  * `func (t Theme) StatusStyle(status ConversionStatus) lipgloss.Style`
+  * `func Info(event string, fields map[string]any)` – informational logs.
+  * `func Error(event string, err error, fields map[string]any)` – error logs.
 
-#### Module: `internal/skillporter/tui/keys`
+#### Module: `cmd/skill-porter-tui`
 
-* **Maps to capability**: TUI Presentation & Interaction (Keybindings).
-* **Responsibility**: Centralize key bindings.
-* **Files**:
+* **Maps to capability**: Configuration & Startup (CLI), TUI Presentation (entry).
+* **Responsibility**: Wire CLI → config → Bubble Tea program; handle process exit code.
+* **File structure**:
 
-  * `keys.go`
-* **Exports**:
+  ```text
+  cmd/skill-porter-tui/
+  └── main.go
+  ```
 
-  * `type KeyMap struct { Up, Down, ConvertDefault, ConvertGemini, ConvertClaude, Skip, Quit, Rescan key.Binding }`
-  * `func DefaultKeyMap() KeyMap`
+* **Exports**: None (main package).
 
-#### Module: `internal/skillporter/errors`
-
-* **Maps to capability**: Error Handling, Logging, Diagnostics.
-* **Responsibility**: Define error types and wrapping helpers for consistent messaging.
-* **Files**:
-
-  * `errors.go`
-* **Exports**:
-
-  * Error constructors (e.g., `ErrSkillPorterMissing`, `ErrNoSkillsFound`).
-
----
+  * `func main()` – parse flags/env, init Model, run `tea.NewProgram`, use summary/failure count to set `os.Exit` code.
 
 4. Dependency Chain
-
----
+   ===================
 
 ### Foundation Layer (Phase 0)
 
 No dependencies.
 
-* **config**
+* **Module: config**
 
-  * Provides `Config` struct and flag parsing.
-* **domain**
+  * Provides `AppConfig` and configuration loading/validation.
+* **Module: domain**
 
-  * Provides core domain types (`SkillDir`, `ConversionTarget`, `ConversionStatus`, `Summary`).
-* **errors**
+  * Provides core types and Bubble Tea messages.
+* **Module: logging**
 
-  * Provides structured error types.
+  * Provides common logging helpers.
 
-### Filesystem & Process Layer (Phase 1)
+### Discovery & Conversion Infrastructure Layer (Phase 1)
 
-* **discovery**
+Depends on foundation.
 
-  * Depends on: `config`, `domain`, `errors`.
-  * Provides `DiscoverSkills`.
-* **convert**
+* **Module: discovery**
 
-  * Depends on: `domain`, `config`, `errors`.
-  * Provides command builder + process runner.
+  * Depends on: `[config, domain]`.
+  * Uses `AppConfig.ScanRoot` and `RecursiveMode` to produce `[]SkillDir`.
+* **Module: conversion**
 
-### TUI Core Layer (Phase 2)
+  * Depends on: `[domain, logging]`.
+  * Uses domain types for skill/target, logging helpers for events.
 
-* **tui/model**
+### TUI Layer (Phase 2)
 
-  * Depends on: `config`, `domain`, `convert`, `discovery`, `errors`.
-  * Provides Bubble Tea model, messages, update logic.
-* **tui/keys**
+Depends on discovery & conversion infrastructure.
 
-  * Depends on: none (constants only) or optionally on Bubble Tea key types.
-* **tui/theme**
+* **Module: ui**
 
-  * Depends on: `domain` (status enums).
+  * Depends on: `[config, domain, discovery, conversion, logging]`.
+  * Uses discovery to find skills, conversion to launch work, logging for debug, config for header and defaults.
+* **Module: guminterop** (optional)
 
-### TUI View Layer (Phase 3)
+  * Depends on: `[logging]`.
+  * Called from `ui` for specific prompts; has no influence on lower layers.
 
-* **tui/view**
+### Entrypoint Layer (Phase 3)
 
-  * Depends on: `tui/model`, `tui/theme`, `tui/keys`, `domain`.
-  * Provides `View()` production function.
+Depends on TUI and foundation.
 
-### CLI Entry Layer (Phase 4)
+* **Module: cmd/skill-porter-tui**
 
-* **cmd/skill-porter-tui**
+  * Depends on: `[config, ui, logging]`.
+  * Orchestrates initial config load then runs Bubble Tea program; sets exit code based on model summary.
 
-  * Depends on: `config`, `tui/model`, `tui/view`, Bubble Tea runtime.
-  * Wires everything into a runnable binary.
+No cycles:
 
-No cycles: each layer depends only on equal or lower layers; there are no mutual dependencies.
-
----
+* Foundation has no deps.
+* discovery/conversion/logging only depend on foundation.
+* ui depends “downwards” only.
+* cmd only depends downwards on ui and foundation.
+* guminterop is optional and only called from ui, with no reverse imports.
 
 5. Development Phases
+   =====================
 
----
+### Phase 0: Foundation & Configuration
 
-### Phase 0: Domain & Configuration Foundation
+**Goal**: Establish configuration schema, domain types, and logging, with a compilable stub CLI.
 
-**Goal**: Establish configuration, domain types, and error primitives.
-
-**Entry Criteria**: Existing repo; no dependencies within this feature set.
+**Entry Criteria**: Existing repo compiles as-is; no Go TUI yet.
 
 **Tasks**:
 
-* [ ] Implement `Config` and flag parsing (depends on: none)
+* [ ] Implement `config` module (AppConfig + flags/env parsing)
 
+  * Depends on: none.
   * Acceptance criteria:
 
-    * `NewConfigFromFlags()` correctly parses provided flags and applies defaults.
-    * Invalid roots or targets produce descriptive errors.
-  * Test strategy:
+    * `go test` for `config` passes.
+    * Running `skill-porter-tui --root /tmp/foo --no-recursive --target claude --out-base ./out` prints parsed config and exits without panic.
+  * Test strategy: unit tests for precedence (env < flags) and validation (missing directory error).
 
-    * Unit tests in `config_flags_test.go` cover:
+* [ ] Implement `domain` module (core types + messages)
 
-      * Default configuration with no flags.
-      * Each flag individually and combinations.
-      * Error cases for invalid paths/targets.
-
-* [ ] Implement domain types and statuses (depends on: none)
-
+  * Depends on: none.
   * Acceptance criteria:
 
-    * `SkillDir`, `ConversionTarget`, `ConversionStatus`, and `Summary` defined.
-    * Helper functions produce correct summary counts based on sample states.
-  * Test strategy:
+    * Types defined for `SkillDir`, `ConversionTarget`, `ConversionStatus`, `Summary`.
+    * Messages defined as distinct Go types; basic compile-time test ensures they implement `tea.Msg` if Bubble Tea already included.
+  * Test strategy: simple compile-time tests and basic constructor tests.
 
-    * Unit tests verifying:
+* [ ] Implement `logging` module
 
-      * Summary aggregation logic.
-      * Correct mapping from status lists to counts.
-
-* [ ] Implement error types (depends on: none)
-
+  * Depends on: none.
   * Acceptance criteria:
 
-    * Distinct error types for missing `skill-porter`, missing skills, etc.
-    * Errors implement `error` and are distinguishable via `errors.Is`.
-  * Test strategy:
+    * `Info`/`Error` available and used by a tiny stub main to log events.
+    * Logs are human-readable and do not include ANSI control codes.
+  * Test strategy: tests asserting output formatting patterns.
 
-    * Unit tests verifying type identity and wrapping behavior.
+**Exit Criteria**: Running a stub `skill-porter-tui` prints parsed config and exits cleanly; core Go types and logging utilities exist and are tested.
 
-**Exit Criteria**:
-
-* Config, domain, and error modules compile and are covered by unit tests.
-* Other modules can import `Config`, domain types, and errors without changes.
-
-**Delivers**:
-
-* Stable foundation for discovery, conversion, and TUI layers.
+**Delivers**: Validated configuration and domain types ready for discovery and conversion modules.
 
 ---
 
-### Phase 1: Discovery & Conversion Engine
+### Phase 1: Discovery & Conversion Infrastructure
 
-**Goal**: Implement skill discovery and conversion execution without TUI.
+**Goal**: Provide filesystem scanning and conversion execution primitives independent of UI.
 
 **Entry Criteria**: Phase 0 complete.
 
 **Tasks**:
 
-* [ ] Implement `DiscoverSkills` (depends on: config, domain, errors)
+* [ ] Implement `discovery.DiscoverSkills` and tests
 
+  * Depends on: `[config, domain]`.
   * Acceptance criteria:
 
-    * Given synthetic directory trees, discovery returns expected `SkillDir` list:
+    * Given a synthetic directory tree with `SKILL.md` and `gemini-extension.json` files, discovery returns unique `SkillDir` objects in recursive mode and correctly handles non-recursive mode.
+    * Empty tree → no skills, no panic, clear error or empty slice.
+  * Test strategy: unit tests constructing temp directories; verify deduplication and file matching.
 
-      * Recursive and non-recursive modes.
-      * De-duplication semantics match bash script.
-      * Correct handling of `SKILL.md` and `gemini-extension.json`.
-    * Returns `ErrNoSkillsFound` when no skills exist.
-  * Test strategy:
+* [ ] Implement `conversion.BuildConvertCommand`
 
-    * Unit tests with temporary directories and files.
-    * Cases: zero, one, many skills; overlapping trees.
-
-* [ ] Implement conversion command builder (depends on: config, domain)
-
+  * Depends on: `[domain]`.
   * Acceptance criteria:
 
-    * For given request, `BuildCommand` returns expected binary name, args, and output directory.
-    * Output directory mirrors `${OUT_BASE}/${name}-${target}` pattern from script.
-  * Test strategy:
+    * For a skill named `foo-skill` with target `gemini` and out base `/tmp/out`, the output directory matches `/tmp/out/foo-skill-gemini` matching `convert-all-skills.sh` semantics.
+    * Command and args arrays are stable and testable (no reliance on global state).
+  * Test strategy: pure function unit tests across combinations of targets and paths.
 
-    * Pure unit tests on `BuildCommand`.
-    * Validate path joining and target handling.
+* [ ] Implement `conversion.ExecuteConversion` with process spawning
 
-* [ ] Implement conversion runner (depends on: config, domain, errors)
-
+  * Depends on: `[logging]`.
   * Acceptance criteria:
 
-    * On a fake or stubbed `skill-porter`, runner correctly interprets exit codes and stderr.
-    * Missing `skill-porter` produces `ErrSkillPorterMissing`.
-  * Test strategy:
+    * For a dummy `true` command, returns exitCode `0`.
+    * For a dummy `false` command, returns non-zero exitCode and error.
+    * Captures stdout/stderr reliably.
+  * Test strategy: unit tests for exit code and output capture; skip on platforms where `true/false` not available by gating.
 
-    * Use an injected command-runner interface to simulate success and failure.
-    * Tests for success, non-zero exit, binary missing.
+* [ ] Design and implement minimal Summary maintenance helper
 
-**Exit Criteria**:
+  * Depends on: `[domain]`.
+  * Acceptance criteria:
 
-* Discovery and conversion modules are test-covered and usable from a simple Go main (for manual sanity checks).
-* No UI dependencies in these modules.
+    * Given a sequence of statuses, resulting Summary matches expected counts.
+  * Test strategy: unit tests for transitions.
 
-**Delivers**:
+**Exit Criteria**: Non-UI Go code supports scanning and running arbitrary commands with correct semantics and summary aggregation.
 
-* Programmatic, testable engine for skill discovery and conversion.
+**Delivers**: CLI can be wired to run a simple non-interactive discovery + conversion run sequentially (e.g., convert first skill only) for debugging.
 
 ---
 
-### Phase 2: Core TUI Model & Event Loop
+### Phase 2: Basic TUI (MVP)
 
-**Goal**: Implement Bubble Tea model, messages, and wiring to discovery/conversion engine.
+**Goal**: Deliver an end-to-end, single-binary TUI that discovers skills, converts them sequentially, and shows statuses and a summary.
 
-**Entry Criteria**: Phases 0–1 complete.
+**Entry Criteria**: Phase 1 complete.
 
 **Tasks**:
 
-* [ ] Define Bubble Tea messages and model struct (depends on: domain, config)
+* [ ] Implement Bubble Tea `Model` and Update loop
 
+  * Depends on: `[config, domain, discovery, conversion, logging]`.
   * Acceptance criteria:
 
-    * Message types exist for configuration updates, discovery complete, start conversion, conversion finished, errors, summary updates, quit.
-    * Model holds skills list, config, selection index, summary, and any global errors.
-  * Test strategy:
+    * On Init, runs discovery and populates a list of skills (or shows “no skills found”).
+    * On key actions (`c` on a selected skill), triggers conversion and updates status from `pending → running → success/failed`.
+  * Test strategy: unit-like tests calling `Update` with synthetic messages; ensure state transitions correct and summary matches.
 
-    * Unit tests verifying model initialization and message type usage.
+* [ ] Implement `view.go` with list, detail, footer panels using Lip Gloss
 
-* [ ] Implement `Init` and discovery kick-off (depends on: discovery)
-
+  * Depends on: `[domain]`.
   * Acceptance criteria:
 
-    * When model starts, it triggers `DiscoverSkills` via a Tea command using current `Config`.
-    * On completion, `SkillsDiscoveredMsg` populates skills and sets summary accordingly.
-  * Test strategy:
+    * Skills render as rows with at least three columns: name, platform, status.
+    * Selected row visually distinct; statuses have different styling for success/failed/skipped.
+    * Footer shows summary counts and key hints.
+  * Test strategy: snapshot tests of `View()` strings for small model states; manual inspection for readability.
 
-    * Use Bubble Tea testing patterns to simulate `Init` and message dispatch; assert model state updates.
+* [ ] Wire `main.go` to run Bubble Tea program and set exit code
 
-* [ ] Implement update logic for actions and conversion orchestration (depends on: convert)
-
+  * Depends on: `[config, ui, logging]`.
   * Acceptance criteria:
 
-    * Selection changes via navigation messages.
-    * Conversion actions produce `StartConversionMsg` and conversion commands.
-    * Conversion completion updates statuses and summary correctly.
-  * Test strategy:
+    * Running `skill-porter-tui` from a directory with sample skills shows TUI, allows converting at least one skill, and exits with non-zero status when any conversion fails.
+  * Test strategy: manual e2e run plus basic automated test that runs program in a pseudo-TTY for a trivial case (if feasible).
 
-    * State-machine-style unit tests that feed sequences of messages and assert transitions.
+**Exit Criteria**: A user can run `skill-porter-tui`, inspect discovered skills, convert them via keyboard, and see a final summary, with exit codes reflecting success/failure.
 
-**Exit Criteria**:
-
-* A minimal TUI (even with a placeholder view) can:
-
-  * Discover skills on startup.
-  * Trigger a conversion for a selected skill.
-  * Reflect updated status and summary.
-
-**Delivers**:
-
-* Working TUI logic with placeholder view; ready for visual polishing.
+**Delivers**: MVP TUI wrapper meeting core success criteria.
 
 ---
 
-### Phase 3: TUI View, Theming, and UX
+### Phase 3: Full Action Parity with Bash Script
 
-**Goal**: Implement full Bubble Tea view with Lip Gloss styling and keybindings.
+**Goal**: Reach behavioral parity with `convert-all-skills.sh` choices (auto-convert remaining, per-skill target overrides, skip, quit-with-summary).
 
-**Entry Criteria**: Phases 0–2 complete.
+**Entry Criteria**: Phase 2 complete.
 
 **Tasks**:
 
-* [ ] Implement key map and navigation (depends on: model)
+* [ ] Implement per-skill target override actions (`g`, `a`)
 
+  * Depends on: `[ui, conversion]`.
   * Acceptance criteria:
 
-    * Key mappings defined in `KeyMap`.
-    * Model update correctly interprets navigation and action keys.
-  * Test strategy:
+    * `g` converts selected skill as gemini even if default is claude; `a` does the reverse.
+    * Summary correctly tracks results.
+  * Test strategy: `Update` tests; manual run with targets.
 
-    * Unit tests verifying mapping and update responses for key events.
+* [ ] Implement auto-convert remaining mode
 
-* [ ] Implement theme and status styles (depends on: domain)
-
+  * Depends on: `[ui, conversion]`.
   * Acceptance criteria:
 
-    * A coherent theme object exists with header, list, detail, and footer styles.
-    * Status-specific styles distinguish pending/running/success/skipped/failed.
-  * Test strategy:
+    * When user chooses “convert all remaining with default target,” all pending skills are queued and processed sequentially without further confirmation (matching `AUTO_CONVERT_MODE` semantics).
+    * UI clearly indicates auto mode in header or detail panel.
+  * Test strategy: `Update` tests for auto mode flag; manual run with multiple skills.
 
-    * Snapshot tests of style strings where appropriate.
-    * Manual inspection for readability in common terminals.
+* [ ] Implement rescan (`r`) behavior
 
-* [ ] Implement list/detail/summary views (depends on: model, theme, keys)
-
+  * Depends on: `[ui, discovery]`.
   * Acceptance criteria:
 
-    * Skills rendered as scrollable list; selected row visibly highlighted.
-    * Detail panel shows path, target, output path, and error snippet.
-    * Summary footer/summary view shows counts and statuses.
-  * Test strategy:
+    * Pressing `r` resets skill list and statuses based on a fresh discovery; summary counters reset.
+  * Test strategy: `Update` tests verifying old skills replaced and counters reset.
 
-    * Golden/snapshot tests for representative model states.
-    * Manual verification in real terminal.
+* [ ] Implement quit behavior with partial summary
 
-**Exit Criteria**:
+  * Depends on: `[ui, logging]`.
+  * Acceptance criteria:
 
-* `skill-porter-tui` provides a visually distinct, usable TUI that meets MVP criteria:
+    * `q` exits with current summary; if conversions are pending or running, a confirmation path is enforced (using TUI or guminterop once available).
+  * Test strategy: `Update` tests for quit messages; manual run.
 
-  * End-to-end conversions from TUI.
-  * Clear status and summary.
+**Exit Criteria**: Feature set matches or supersedes all usage flows from `convert-all-skills.sh` (excluding its line-based gum UI).
 
-**Delivers**:
-
-* User-facing TUI with structured layout and theming.
+**Delivers**: Fully capable TUI that replicates script behavior with better ergonomics.
 
 ---
 
-### Phase 4: Enhancements & Gum Interoperability
+### Phase 4: Gum Interop & Diagnostics
 
-**Goal**: Add non-essential but valuable enhancements.
+**Goal**: Integrate gum where it adds value and enrich diagnostics for troubleshooting.
 
-**Entry Criteria**: Phases 0–3 complete.
+**Entry Criteria**: Phase 3 complete.
 
 **Tasks**:
 
-* [ ] Implement AUTO_CONVERT_MODE equivalent (depends on: model, convert)
+* [ ] Implement `guminterop.ConfirmWithGum` and wire to quit/auto actions
 
+  * Depends on: `[logging]`.
   * Acceptance criteria:
 
-    * A mode where user can auto-convert remaining pending skills with a chosen target.
-    * Behavior mirrors `Convert ALL remaining` semantics conceptually.
-  * Test strategy:
+    * If `gum` is installed, disruptive actions (quit with pending, switch to auto-convert) use gum confirm with clear messages.
+    * If gum is absent, a TUI-based confirm is used; no behavior regression.
+  * Test strategy: tests that simulate `gum` presence/absence via PATH; manual run.
 
-    * Unit tests on model transitions and summary updates in auto mode.
+* [ ] Implement `--debug` flag and extended logging
 
-* [ ] Implement gum-based optional confirmations (depends on: model, external gum binary)
-
+  * Depends on: `[config, logging]`.
   * Acceptance criteria:
 
-    * For actions like quitting with pending skills, gum confirm can be used when available.
-    * TUI gracefully falls back to in-TUI confirmation if gum is missing.
-  * Test strategy:
+    * When `--debug` is set, logs include command args and durations; when unset, logs remain minimal.
+  * Test strategy: unit tests verifying log fields for debug vs non-debug.
 
-    * Tests using injected command runner to simulate gum presence/absence.
+**Exit Criteria**: Gum used selectively where helpful; logging supports debugging issues without overwhelming standard output.
 
-* [ ] Documentation completion (depends on: all previous)
-
-  * Acceptance criteria:
-
-    * `docs/skill-porter-tui.md` and task doc updated with final behavior.
-    * README snippet present.
-  * Test strategy:
-
-    * Manual review.
-
-**Exit Criteria**:
-
-* TUI matches or exceeds bash script ergonomics.
-* Docs describe all major behaviors.
-
-**Delivers**:
-
-* Polished, production-appropriate tool.
+**Delivers**: Polished integration, better debuggability.
 
 ---
+
+### Phase 5: Documentation & Hardening
+
+**Goal**: Ship documentation and robust tests.
+
+**Entry Criteria**: Phases 0–4 complete.
+
+**Tasks**:
+
+* [ ] Write `docs/skill-porter-tui.md`
+
+  * Depends on: `[cmd/skill-porter-tui, ui]`.
+  * Acceptance criteria:
+
+    * Document flags, UI layout, keyboard shortcuts, and relationship to `convert-all-skills.sh`.
+    * Include at least one screenshot of TUI.
+  * Test strategy: documentation review.
+
+* [ ] Update `docs/tasks/todo/01-gum-wrapper-for-skill-porter.md` with final status and notes
+
+  * Depends on: the entire implementation.
+  * Acceptance criteria:
+
+    * This PRD and implementation notes are captured; task status clearly indicated.
+
+* [ ] Expand test coverage for edge cases
+
+  * Depends on: all modules.
+  * Acceptance criteria:
+
+    * Unit tests cover discovery, command building, state transitions, and summary logic across edge cases (no skills, mixed successes/failures, interrupted runs).
+    * Target coverage thresholds met (see Test Strategy).
+
+**Exit Criteria**: Documentation available; tests stable; CLI ready for regular use.
+
+**Delivers**: Production-ready TUI wrapper with supporting docs and test suite.
 
 6. User Experience
+   ==================
 
----
+Personas
 
-### Personas
+* **Tooling engineer**: Works on multiple skills/extensions; wants a fast, inspectable batch conversion flow.
+* **Skill author**: Maintains 1–3 skills; occasionally runs conversions; cares about clarity and minimal friction.
 
-* **Skill maintainer “Alex”**
+Key Flows
 
-  * Maintains 20–200 skills in nested directories.
-  * Frequently re-runs conversions for new targets (e.g., gemini, claude).
-  * Needs a clear overview of what has been processed and what failed.
+1. **Basic batch conversion**
 
-* **Tooling engineer “Jordan”**
+   * Run `skill-porter-tui`.
+   * Adjust root, recursive mode, target, output base if desired.
+   * See list of discovered skills; press `c` to convert each or enable auto-convert remaining.
+   * Watch statuses update; inspect any failures in the detail panel.
+   * On completion, summary panel shows counts; exit.
 
-  * Integrates `skill-porter-tui` into CI or standardized local workflows.
-  * Wants deterministic behavior, clear exit codes, and scriptability.
+2. **Target override for specific skills**
 
-### Key Flows
+   * Same as above, but for a particular skill, press `g` or `a` to override target before converting.
+   * Detail panel shows target used and output path.
 
-1. **Quick single-directory conversion**
+3. **Failure inspection**
 
-   * Alex runs `skill-porter-tui --root ./skills/my-skill --no-recursive --target gemini`.
-   * TUI loads a single skill, displays it as `pending`.
-   * Alex presses `c` to convert; status becomes `running` then `success`.
-   * Summary shows `Succeeded: 1, Skipped: 0, Failed: 0`.
+   * If a conversion fails, status shows `failed`.
+   * Selecting that skill shows exit code and error snippet in detail panel.
+   * User can re-run conversion (e.g. after fixing issues) by pressing `c`.
 
-2. **Full-tree recursive conversion**
+4. **Rescanning after file changes**
 
-   * Alex runs `skill-porter-tui --root ./skills`.
-   * TUI discovers all skills; list shows them as `pending`.
-   * Alex navigates with `j/k` to inspect entries; triggers conversions for some manually, then enables auto-convert for remaining.
-   * Failed entries show as `failed` with error snippets; Alex inspects and decides which to retry.
+   * User modifies skill tree on disk.
+   * Press `r` to rescan; list updates; statuses reset.
 
-3. **Error handling**
+UI/UX Notes
 
-   * `skill-porter` missing: on start, tool detects absence and shows an error banner similar to `convert-all-skills.sh` behavior and exits with non-zero.
-   * Per-skill failures: failed status with last error line shown in detail panel.
+* Use a clear header with current default target, scan mode (recursive/single), and root path.
+* Skill list is the main focus; detail panel and footer are secondary but always visible.
+* Lip Gloss styling:
 
-### UI/UX Notes
-
-* Prefer immediate, at-a-glance visibility:
-
-  * Status icons on each row.
-  * Global summary always visible in footer.
-* TUI layout:
-
-  * Header: tool name, default target, mode (recursive/single), root path.
-  * Main area: list of skills, multi-line rows where necessary.
-  * Side/bottom: detail panel with human-readable path and output directory.
-* Key hints:
-
-  * Show a minimal key legend in footer (`↑/↓ j/k move, c/g/a convert, s skip, q quit, r rescan`).
-* Ensure UI remains responsive on large skill sets via throttled rendering if necessary (handled in implementation).
-
----
+  * Consistent theme with distinct colors for success (green-ish), failed (red-ish), pending (dim).
+  * Bordered panels (header, list, detail) with padding; avoid clutter.
+* Avoid nested modal flows; keep interactions single-key and reversible.
+* Ensure keyboard navigation and reading experience work well on both small and large terminals.
 
 7. Technical Architecture
+   =========================
 
----
+System Components
 
-### System Components
+* **skill-porter-tui binary (Go)**
 
-* **CLI entry (Go main)**
+  * Main entry point; CLI + Bubble Tea program.
+  * Uses `os/exec` to call `skill-porter` CLI for conversions.
 
-  * Parses flags, creates `Config`, launches Bubble Tea program.
+* **Discovery engine (Go)**
 
-* **Domain layer**
+  * Walks filesystem based on config; identifies skills by presence of `SKILL.md` or `gemini-extension.json`.
 
-  * Type definitions for skills, statuses, targets, summaries.
+* **Conversion engine (Go)**
 
-* **Discovery layer**
+  * Builds and runs `skill-porter convert <dir> --to <target> --output <path>`.
+  * Interprets exit codes and output.
 
-  * Filesystem traversal and skill detection.
+* **TUI engine (Go + Bubble Tea + Lip Gloss)**
 
-* **Conversion layer**
+  * Owns application state, key handling, and views.
+  * Communicates with discovery/conversion via Bubble Tea messages and commands.
 
-  * Command builder and process runner wrapping `skill-porter convert`.
+* **Optional gum interop (Go + gum CLI)**
 
-* **TUI core**
+  * Used for confirm prompts for destructive/bulk actions if available.
 
-  * Bubble Tea model (state + update loop).
-  * Integration with discovery and conversion via Tea commands.
+Data Models
 
-* **TUI presentation**
+* `AppConfig`: root string, recursive bool, default target enum, output base string, debug flag, auto-convert flag.
+* `SkillDir`: path string, name string, bools for `HasSkillMd`/`HasGeminiManifest`, optional platform string.
+* `ConversionStatus`: `pending | running | success | skipped | failed`.
+* `Summary`: integer counters.
+* Bubble Tea messages: strongly typed structs carrying IDs and payloads.
 
-  * View rendering using Lip Gloss.
-  * Key handling and view composition.
+Technology Stack
 
-* **Existing bash script**
+* Go (version as per repo standard).
+* `github.com/charmbracelet/bubbletea` for TUI event loop.
+* `github.com/charmbracelet/lipgloss` for styling.
+* `os/exec` for `skill-porter` and optional `gum`.
+* Existing Node-based `skill-porter` CLI as the conversion engine; no changes required to its internal JS modules.
 
-  * `scripts/convert-all-skills.sh` remains unchanged and can be used independently.
-
-### Data Models
-
-* `Config`
-
-  * `ScanRoot string`
-  * `Recursive bool`
-  * `DefaultTarget ConversionTarget`
-  * `OutBaseDir string`
-
-* `SkillDir`
-
-  * `Path string`
-  * `Name string`
-  * `HasSKILL bool`
-  * `HasGeminiExtension bool`
-
-* `SkillState`
-
-  * `Skill SkillDir`
-  * `Status ConversionStatus`
-  * `SelectedTarget ConversionTarget`
-  * `OutputPath string`
-  * `LastErrorMessage string`
-
-* `Summary`
-
-  * `Success int`
-  * `Skipped int`
-  * `Failed int`
-  * `Total int`
-
-### Technology Stack
-
-* **Language**: Go.
-* **TUI Framework**: Bubble Tea (program loop) + Lip Gloss (styling).
-* **External tools**: `skill-porter` CLI (required), `gum` (optional for confirmations in Phase 4).
-
-### Key Decisions
-
-**Decision: Implement conversion logic in Go, not via `convert-all-skills.sh` subprocess**
+Decision: call `skill-porter` CLI directly instead of wrapping `convert-all-skills.sh`
 
 * **Rationale**:
 
-  * Avoid piping interactive gum-based script from a TUI.
-  * Reduce coupling and complexity; treat the script as a reference and legacy CLI.
-  * Align with “no god modules” / one responsibility per module.
+  * Avoid double-interactive behavior (gum prompts inside a TUI).
+  * Prevent long-term divergence between TUI and script by centralizing semantics around the CLI contract.
+  * Keeps Bash script as an independent, still-supported entrypoint.
 * **Trade-offs**:
 
-  * Duplication of some semantics (AUTO_CONVERT_MODE behavior) between Go and bash.
-* **Alternatives**:
+  * Some logic must be re-implemented in Go (e.g., auto-convert mode, summaries).
+  * Two orchestrators (Bash and TUI) to maintain conceptually.
+* **Alternatives considered**:
 
-  * Add non-interactive, JSON-output mode to `convert-all-skills.sh` and call it from Go (rejected for MVP due to complexity and tight coupling).
+  * Adding `--non-interactive`/`--json` to `convert-all-skills.sh` and wrapping it from Go (rejected due to layering and coupling).
+  * Embedding Node’s `SkillPorter` directly via a cgo/Node bridge (too complex and brittle).
 
-**Decision: Sequential conversions for MVP**
+Decision: modular Go layout under `internal/skillportertui`
 
-* **Rationale**:
-
-  * Simpler mapping to existing script semantics.
-  * Avoid complexity of parallel process management and UI concurrency.
-* **Trade-offs**:
-
-  * Less throughput for large trees.
-* **Alternatives**:
-
-  * Configurable concurrency with a worker pool (can be added later, but not required for initial PRD).
-
----
+* **Rationale**: Aligns with enforced module design rules; avoids god modules and “utils”.
+* **Trade-offs**: More files, but clearer maintenance.
+* **Alternatives**: Single `tui.go` or `main.go` with everything (explicitly rejected).
 
 8. Test Strategy
+   ================
 
----
+## Test Pyramid
 
-### Test Pyramid
-
-```
+```text
         /\
-       /E2E\        ← ~10% (manual and scripted terminal runs)
+       /E2E\        ← ~10%: end-to-end runs of CLI in controlled environments
       /------\
-     /Integration\  ← ~30% (TUI model + engine interaction)
+     /Integration\  ← ~30%: Bubble Tea model transitions + process exec with fake commands
     /------------\
-   /  Unit Tests  \← ~60% (config, discovery, conversion, model update)
+   /  Unit Tests  \← ~60%: pure discovery, config, command building, summary logic
   /----------------\
 ```
 
-### Coverage Requirements
+## Coverage Requirements
 
-* Line coverage (non-UI core packages): ≥80%.
-* Branch coverage (discovery and conversion logic): ≥80%.
-* Function coverage: ≥90% for exported functions in `config`, `domain`, `discovery`, `convert`, `tui/model`.
-* Statement coverage: track as part of line coverage; ensure all error paths in discovery and conversion are exercised.
+* Line coverage: ≥ 80% on `internal/skillportertui` packages.
+* Branch coverage: ≥ 70% on discovery, config, and conversion modules.
+* Function coverage: ≥ 90% of exported functions.
+* Statement coverage: ≥ 80% overall.
 
-### Critical Test Scenarios
+## Critical Test Scenarios
 
-#### Module: `discovery`
+### Discovery
 
-* **Happy path**:
+**Happy path**
 
-  * Recursive scan of a tree with multiple skills; ensure all are discovered once.
-  * Non-recursive mode on a single skill directory.
-* **Edge cases**:
+* Scenario: Directory tree with multiple skills and nested directories.
+* Expected: All unique skill directories detected; counts match; no duplicates.
 
-  * Directories with both `SKILL.md` and `gemini-extension.json`.
-  * Very deep directory nesting.
-* **Error cases**:
+**Edge cases**
 
-  * Non-existent root path.
-  * Permission-denied path.
-* **Integration points**:
+* Scenario: Empty root, root not existing, only `SKILL.md` files, only `gemini-extension.json`.
+* Expected: Informative error or “no skills found” message; no panics.
 
-  * `DiscoverSkills` used by TUI `Init`—ensure the model handles empty results.
+**Error cases**
 
-#### Module: `convert`
+* Scenario: Permission-denied directories.
+* Expected: Discovery continues where possible; logs a warning; surfaces partial results gracefully.
 
-* **Happy path**:
+**Integration points**
 
-  * `BuildCommand` for typical skill names and targets.
-  * Successful `RunConversion` with simulated `skill-porter`.
-* **Edge cases**:
+* Discovery output consumed by UI; list view correctly reflects number of skills and selection.
 
-  * Skill name with spaces or unusual characters.
-* **Error cases**:
+### Conversion Command Builder & Executor
 
-  * Missing `skill-porter` binary.
-  * Non-zero exit code from `skill-porter` with stderr.
-* **Integration points**:
+**Happy path**
 
-  * Correct status transitions and summary updates in `tui/model` on success/failure.
+* Scenario: Valid skill dir, target `gemini`, out base set.
+* Expected: Command matches `skill-porter convert <dir> --to gemini --output <_expected>`; exitCode=0 when stubbed.
 
-#### Module: `tui/model`
+**Edge cases**
 
-* **Happy path**:
+* Scenario: Paths with spaces, nested directories.
+* Expected: Proper quoting/arg building; no shell interpolation issues.
 
-  * Sequence: `Init` → `SkillsDiscoveredMsg` → `StartConversionMsg` → `SkillConvertedMsg`.
-* **Edge cases**:
+**Error cases**
 
-  * Navigation beyond list edges.
-  * Converting already-successful skill (should be a no-op).
-* **Error cases**:
+* Scenario: `skill-porter` not on PATH.
+* Expected: Clear error surfaced in TUI detail panel and logs; global error message instructing to install `skill-porter`.
 
-  * Handling `ConversionErrorMsg` and preserving `LastErrorMessage`.
-* **Integration points**:
+**Integration points**
 
-  * Summary updates after each change.
+* Conversion messages updating Bubble Tea model statuses and Summary.
 
-### Test Generation Guidelines
+### TUI Model & Views
 
-* Preference for deterministic tests:
+**Happy path**
 
-  * Avoid depending on real filesystem where possible; use temporary directories.
-  * Inject process runner interfaces to avoid invoking real `skill-porter` in unit tests.
-* Keep test modules aligned with feature slices:
+* Scenario: User uses only `c` to convert all skills sequentially.
+* Expected: All statuses reach `success`; summary matches; exit code 0.
 
-  * No cross-feature “god” tests aggregating unrelated logic.
-* For TUI:
+**Edge cases**
 
-  * Use state-level tests for model logic.
-  * Reserve manual tests for terminal rendering and UX details.
+* Scenario: Narrow terminal width; multiple pages of skills.
+* Expected: List scrolls correctly; footer remains readable.
 
----
+**Error cases**
+
+* Scenario: Several conversions fail; user quits early.
+* Expected: Failed statuses and summary counts reflect actual results; exit code non-zero.
+
+**Integration points**
+
+* Interaction between key handling and conversion engine; ensuring no state corruption when multiple conversions triggered quickly.
+
+## Test Generation Guidelines
+
+* Prefer table-driven tests for config parsing, discovery, and command building.
+* For Bubble Tea model tests, simulate sequences of messages and assert final model state (pure Update tests).
+* Keep any e2e tests deterministic by using small synthetic trees and stubbed `skill-porter` commands where possible.
+* Avoid fragile TUI snapshot tests that depend on terminal width; instead test structure (presence of key labels, counts, and status text).
 
 9. Risks and Mitigations
+   ========================
 
----
+## Technical Risks
 
-### Technical Risks
+**Risk**: Dual semantics with Bash script diverge over time
 
-**Risk**: Divergence between Go orchestration and bash script semantics
-
-* **Impact**: Medium (confusing behavior differences).
+* **Impact**: Medium – confusing differences between TUI and script behavior.
 * **Likelihood**: Medium.
 * **Mitigation**:
 
-  * Use `convert-all-skills.sh` as a reference test case and manually compare behavior on sample trees.
-* **Fallback**:
+  * Treat `convert-all-skills.sh` as a behavioral reference; update TUI when script semantics change and vice versa.
+  * Keep core defaults identical (root, target, output base).
+* **Fallback**: Document any intentional differences in `docs/skill-porter-tui.md`.
 
-  * If divergence becomes problematic, add a script-based non-interactive mode and call it from Go for authoritative behavior.
+**Risk**: TUI rendering performance on large trees
 
-**Risk**: TUI performance on large skill trees
+* **Impact**: Medium – sluggish UX.
+* **Likelihood**: Medium on large repos.
+* **Mitigation**:
 
-* **Impact**: Medium.
+  * Use efficient data structures and avoid excessive re-renders; only re-render on relevant messages.
+  * Consider throttling visual updates for very large lists if needed.
+* **Fallback**: Recommend script-based workflow for extremely large trees.
+
+**Risk**: Cross-platform process execution differences
+
+* **Impact**: Medium – inconsistent behavior on Windows/WSL vs Unix.
 * **Likelihood**: Medium.
 * **Mitigation**:
 
-  * Keep rendering efficient; avoid re-rendering entire list on every minor update.
-  * Consider batched updates if needed.
-* **Fallback**:
+  * Use `exec.Command` without shell where possible; keep commands simple.
+  * Keep path handling platform-neutral.
+* **Fallback**: Document OS limitations; add integration tests on multiple platforms as the project matures.
 
-  * Offer a “summary-only” or non-interactive mode for very large runs.
+## Dependency Risks
 
-**Risk**: Terminal compatibility
+**Risk**: Bubble Tea / Lip Gloss API changes
 
 * **Impact**: Low–Medium.
+* **Likelihood**: Low.
+* **Mitigation**:
+
+  * Pin versions in Go module; track release notes.
+* **Fallback**: If APIs shift, adjust TUI implementation; core discovery/conversion logic remains unaffected.
+
+**Risk**: `skill-porter` CLI changes
+
+* **Impact**: High – command options or behavior may change.
 * **Likelihood**: Medium.
 * **Mitigation**:
 
-  * Test on common terminals (macOS Terminal/iTerm2, Linux shells).
-  * Favor simple, robust ANSI styling.
-* **Fallback**:
+  * Keep TUI command construction minimal and aligned with documented CLI interface (`convert <source> --to <platform> --output <path>`).
+* **Fallback**: Detect CLI version mismatches and warn users.
 
-  * Provide a `--no-style` or minimal mode if necessary.
+## Scope Risks
 
-### Dependency Risks
+**Risk**: Over-extending features (config persistence, concurrency, advanced filters)
 
-**Risk**: `skill-porter` CLI breaking changes
-
-* **Impact**: High (core conversions fail).
-* **Likelihood**: Low–Medium.
+* **Impact**: Medium – delays MVP ship.
+* **Likelihood**: High without discipline.
 * **Mitigation**:
 
-  * Keep all interactions limited to `skill-porter convert` command and document expectations.
-* **Fallback**:
-
-  * Adjust conversion command builder quickly; tool remains otherwise intact.
-
-**Risk**: Missing gum for optional confirmations
-
-* **Impact**: Low (only affects optional gum usage).
-* **Likelihood**: Medium.
-* **Mitigation**:
-
-  * Treat gum strictly as optional; TUI confirmations are primary.
-* **Fallback**:
-
-  * Disable gum interoperability gracefully.
-
-### Scope Risks
-
-**Risk**: Over-expansion of TUI features (multi-target, advanced filters)
-
-* **Impact**: Medium.
-* **Likelihood**: Medium.
-* **Mitigation**:
-
-  * Keep MVP scope tightly aligned with: configuration, discovery, per-skill actions, summary.
-* **Fallback**:
-
-  * Push advanced features into future phases without blocking core delivery.
-
-**Risk**: Violating module-design constraints (creating “god modules”)
-
-* **Impact**: High (technical debt; violates environment rules).
-* **Likelihood**: Medium.
-* **Mitigation**:
-
-  * Enforce feature slices and single responsibility during code reviews.
-* **Fallback**:
-
-  * Refactor early; do not add new behavior into mixed-responsibility files.
-
----
+  * Strictly treat Phase 2 as MVP; non-MVP features gated to later phases.
+* **Fallback**: Ship MVP with documented limitations; postpone nonessential features.
 
 10. Appendix
+    ============
 
----
+## References
 
-### References
+* `convert-all-skills.sh`: current recursive scanning + gum script, including interactive prompts, auto-convert mode, and summary counters.
+* `skill-porter` CLI and core modules: conversion, detection, validation, universalization logic.
+* Module design rules: avoid god modules, single-responsibility files, feature-oriented slices.
+* RPG PRD template and method: structure for capability/structural/dependency/phase design used here.
 
-* `scripts/convert-all-skills.sh` – existing bash script performing discovery, interactive gum prompts, conversion, and summary counts.
-* `SKILL.md` – example of skill root structure referenced during discovery (presence of `SKILL.md` as marker).
-* System module design rules – constraints on module responsibilities and feature-based organization.
-* General rules – early-stage project, no workarounds, no tech debt, maintain existing features.
-* RPG PRD template and Task Master integration.
+## Glossary
 
-### Glossary
+* **Skill**: Claude Code skill or Gemini CLI extension directory containing `SKILL.md` and/or `gemini-extension.json`.
+* **TUI**: Text-based User Interface using Bubble Tea and Lip Gloss.
+* **MVP**: Minimum viable product; smallest end-to-end implementation that delivers core conversion flows.
 
-* **Skill**: A directory containing `SKILL.md` and/or `gemini-extension.json`, representing a unit for conversion.
-* **Target**: Conversion destination (e.g., `gemini`, `claude`).
-* **TUI**: Text-based User Interface, here implemented with Bubble Tea and Lip Gloss.
-* **AUTO_CONVERT_MODE**: Mode where remaining skills are automatically converted with a chosen target.
+## Open Questions
 
-### Open Questions
-
-* Should the TUI support concurrent conversions out of the box or only sequential for now?
-* Should a future phase add a programmatic, non-interactive mode (e.g., JSON output) for CI workflows?
-* Do we eventually deprecate or simplify `convert-all-skills.sh` once the TUI is stable, or keep both indefinitely?
+* Whether to add a non-interactive/JSON-output mode to `convert-all-skills.sh` for non-TUI tooling, or keep all new orchestration in Go only.
+* Whether future versions should support parallel conversions with bounded concurrency and how to present that safely in the TUI.

@@ -2,246 +2,298 @@
   "master": {
     "tasks": [
       {
-        "id": 1,
-        "title": "Initialize Project Structure and Domain Foundation",
-        "description": "Set up the Go project structure, initialize the module, and implement the core domain types and configuration management.",
-        "details": "1. Initialize `go.mod` if not present.\n2. Create directory structure: `cmd/skill-porter-tui`, `internal/skillporter/{config,domain,discovery,convert,tui,errors}`.\n3. Implement `internal/skillporter/domain`: Define `SkillDir`, `ConversionTarget`, `ConversionStatus` enums, and `Summary` struct.\n4. Implement `internal/skillporter/config`: Create `Config` struct and `NewConfigFromFlags` using standard `flag` package to parse `--root`, `--recursive`, `--target`, and `--out-base`.\n5. Implement `internal/skillporter/errors`: Define custom error types (e.g., `ErrSkillPorterMissing`, `ErrNoSkillsFound`).",
-        "testStrategy": "Unit tests in `config_flags_test.go` to verify flag parsing defaults and overrides. Unit tests for Summary aggregation logic.",
+        "id": "1",
+        "title": "Initialize Repository Structure, Domain Types, and Logging",
+        "description": "Set up the Go module structure and implement the core domain types and logging infrastructure.",
+        "details": "Initialize a new Go module (or sub-module). Create the directory structure as defined in the PRD (cmd/, internal/skillportertui/...). Implement `internal/skillportertui/domain/types.go` defining `SkillDir`, `ConversionStatus`, `Summary`, and `ConversionTarget` structs. Implement `internal/skillportertui/domain/messages.go` for Bubble Tea messages (`SkillsDiscoveredMsg`, `SkillConvertedMsg`, etc.). Implement `internal/skillportertui/logging/logger.go` with structured logging helpers (`Info`, `Error`) that write to stderr or a log file without ANSI codes.",
+        "testStrategy": "Verify Go module compilation. Create unit tests for domain type constructors. Write a small test for the logger to ensure it formats JSON/text correctly and handles fields.",
         "priority": "high",
         "dependencies": [],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "complexity": 2,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed. Focus on clean package separation.",
+        "updatedAt": "2025-12-11T01:23:58.809Z"
       },
       {
-        "id": 2,
-        "title": "Implement Skill Discovery Module",
-        "description": "Create the logic to recursively scan directories for valid skills, matching the behavior of the existing bash script.",
-        "details": "1. Implement `internal/skillporter/discovery/discovery.go`.\n2. Function `DiscoverSkills(cfg Config) ([]SkillDir, error)`.\n3. Logic: Walk file system starting at `cfg.ScanRoot`.\n4. Identification: Look for `SKILL.md` or `gemini-extension.json`.\n5. Handle `cfg.Recursive`: If false, only check root.\n6. De-duplication: Ensure directories are not counted twice if they contain both marker files.\n7. Return sorted list of `SkillDir`.",
-        "testStrategy": "Unit tests using a temporary directory structure (mock filesystem) with various nesting levels to verify recursive discovery and de-duplication.",
+        "id": "2",
+        "title": "Implement Configuration Parsing Module",
+        "description": "Create the configuration module to handle CLI flags, environment variables, and defaults.",
+        "details": "Implement `internal/skillportertui/config/config.go` and `flags.go`. Define the `AppConfig` struct (`ScanRoot`, `RecursiveMode`, `DefaultTarget`, `OutBaseDir`, `AutoConvertMode`). Implement `LoadFromFlagsAndEnv()` to parse flags (using standard `flag` package) and environment variables (`SKILL_PORTER_ROOT`, etc.), applying precedence (CLI > Env > Defaults). Validate paths ensure they exist.",
+        "testStrategy": "Unit tests checking precedence: ensure CLI flags override env vars, and env vars override defaults. Test validation logic with invalid paths.",
         "priority": "high",
         "dependencies": [
-          1
+          "1"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "complexity": 3,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed.",
+        "updatedAt": "2025-12-11T01:24:50.978Z"
       },
       {
-        "id": 3,
-        "title": "Implement Conversion Orchestration Engine",
-        "description": "Develop the non-UI logic to build and execute `skill-porter` commands.",
-        "details": "1. Implement `internal/skillporter/convert/command_builder.go`: Create `BuildCommand` function that accepts a `SkillDir` and `Target` and returns the `exec.Cmd` struct and output path.\n2. Output path logic: `${OutBaseDir}/${name}-${target}`.\n3. Implement `internal/skillporter/convert/runner.go`: Create `RunConversion` function that executes the command, captures `stdout`/`stderr`, and maps exit codes to `ConversionResult`.\n4. Ensure strict error handling for missing binaries.",
-        "testStrategy": "Unit tests for `BuildCommand` to verify string formatting. Integration-style tests for `RunConversion` using a mock or echo command to simulate exit codes.",
+        "id": "3",
+        "title": "Implement Skill Discovery Infrastructure",
+        "description": "Develop the logic to recursively scan directories and identify valid skills.",
+        "details": "Implement `internal/skillportertui/discovery/discovery.go`. Create `DiscoverSkills(root string, recursive bool)` function. It should walk the file system using `filepath.WalkDir`. Identify skills by the presence of `SKILL.md` or `gemini-extension.json`. Deduplicate directories. Populate and return a slice of `domain.SkillDir`. Handle permission errors gracefully.",
+        "testStrategy": "Unit tests using a temporary directory structure with various combinations of valid skills, nested directories, and empty folders. Verify correct counts and metadata extraction.",
         "priority": "high",
         "dependencies": [
-          1
+          "2"
         ],
-        "status": "pending",
+        "status": "done",
+        "subtasks": [],
+        "complexity": 4,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed.",
+        "updatedAt": "2025-12-11T01:25:35.277Z"
+      },
+      {
+        "id": "4",
+        "title": "Implement Conversion Command Builder and Executor",
+        "description": "Create the infrastructure to build and execute the underlying `skill-porter` CLI commands.",
+        "details": "Implement `internal/skillportertui/conversion/command_builder.go` to generate `skill-porter` command strings based on inputs (`convert <path> --to <target> --output <out>`). Implement `executor.go` using `os/exec` to run the commands. Capture stdout/stderr. Return exit codes and output. Ensure process execution is non-blocking to the main thread (prepare for async usage).",
+        "testStrategy": "Unit tests for `BuildConvertCommand` to verify flag composition. Integration tests using a mock executable (or `true`/`false`) to verify `ExecuteConversion` handles exit codes and output capture correctly.",
+        "priority": "high",
+        "dependencies": [
+          "1"
+        ],
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Implement Command Construction Logic",
-            "description": "Create the logic to build command arguments and resolve output paths for skill conversions.",
+            "title": "Implement Command Builder Logic",
+            "description": "Develop the pure function logic to construct CLI arguments for the skill-porter binary based on conversion parameters.",
             "dependencies": [],
-            "details": "Implement `internal/skillporter/convert/command_builder.go`. Define a `BuildCommand` function that accepts `SkillDir`, `Target`, and configuration. It must generate the output file path following the pattern `${OutBaseDir}/${name}-${target}` and construct the `exec.Cmd` object pointing to the `skill-porter` binary.",
+            "details": "Create `internal/skillportertui/conversion/command_builder.go`. Implement a function `BuildConvertCommand(inputPath, targetFormat, outputDir string) []string` that returns the argument slice (e.g., `[\"convert\", inputPath, \"--to\", targetFormat, \"--output\", outputDir]`). Ensure correct flag formatting and path handling.",
             "status": "pending",
-            "testStrategy": "Unit tests verifying that given inputs result in the correct command arguments and file path strings."
+            "testStrategy": "Unit tests verifying that specific input parameters result in the expected slice of command arguments.",
+            "parentId": "undefined"
           },
           {
             "id": 2,
-            "title": "Implement Process Runner and Result Handling",
-            "description": "Develop the execution logic to run commands, capture output, and map exit codes to results.",
+            "title": "Implement Process Executor with Output Capture",
+            "description": "Create the execution wrapper using `os/exec` to run commands, handle contexts, and capture standard output and error streams.",
             "dependencies": [
               1
             ],
-            "details": "Implement `internal/skillporter/convert/runner.go`. Create `RunConversion` which executes the prepared command. It must capture `stdout` and `stderr` into the result object and map the OS exit code to a `ConversionResult` (Success/Failed). Abstract the execution via an interface to allow testing without real OS processes.",
+            "details": "Implement `internal/skillportertui/conversion/executor.go`. Create `ExecuteCommand(ctx context.Context, command string, args []string) (string, error)`. Use `exec.CommandContext` to support timeouts/cancellation. Capture `Stdout` and `Stderr` into buffers. Return combined output and error if the process exits with a non-zero code.",
             "status": "pending",
-            "testStrategy": "Integration tests using mock commands (e.g., echo, false) to verify stdout capture and exit code mapping logic."
+            "testStrategy": "Integration tests using dummy commands (like `echo` or `false`) to verify that stdout is captured correctly and exit codes are propagated as errors.",
+            "parentId": "undefined"
           }
-        ]
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 2,
+        "expansionPrompt": "Break down into: 1) The Command Builder (pure function logic) and 2) The Executor (os/exec wrapper with output capturing).",
+        "updatedAt": "2025-12-11T01:26:27.601Z"
       },
       {
-        "id": 4,
-        "title": "Initialize TUI Model and Messages",
-        "description": "Set up the Bubble Tea model structure and define all state messages.",
-        "details": "1. Implement `internal/skillporter/tui/model/messages.go`: Define `SkillsDiscoveredMsg`, `StartConversionMsg`, `SkillConvertedMsg`, `ConversionErrorMsg`, `SummaryUpdatedMsg`, `QuitMsg`.\n2. Implement `internal/skillporter/tui/model/model.go`: Define `Model` struct containing `[]SkillState`, `Config`, `cursor int`, `Summary`.\n3. Implement `Init()` method: Should return a `tea.Cmd` that triggers the Discovery function (from Task 2).",
-        "testStrategy": "Unit tests to verify `Init` returns the correct command type and Model initializes with default zero values.",
+        "id": "5",
+        "title": "Implement Basic TUI Model and List View",
+        "description": "Set up the Bubble Tea model and the main list view for displaying discovered skills.",
+        "details": "Implement `internal/skillportertui/ui/model.go` and `view.go`. Define the `Model` struct holding `AppConfig` and `[]SkillDir`. Implement `Init()` to trigger the discovery command. Implement `View()` using Lip Gloss to render a list of skills. Show rows with name, platform, and a status placeholder. Implement basic navigation (up/down) in `Update()`.",
+        "testStrategy": "Visual verification by running a simple main wrapper. Unit tests for `Update` ensuring navigation changes the selected index correctly.",
         "priority": "medium",
         "dependencies": [
-          2,
-          3
+          "3",
+          "4"
         ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 5,
-        "title": "Implement TUI Update Loop and Interactions",
-        "description": "Implement the `Update` method to handle state transitions, navigation, and command dispatching.",
-        "details": "1. Implement `internal/skillporter/tui/model/update.go`.\n2. Handle `tea.KeyMsg`: Implement navigation (up/down/j/k) to update cursor.\n3. Implement Action Keys: `c` (convert default), `s` (skip), `g`/`a` (specific targets).\n4. Handle `StartConversionMsg`: Update status to `running`, return `tea.Cmd` calling `convert.RunConversion`.\n5. Handle `SkillConvertedMsg`: Update status to `success` or `failed`, update `Summary`.\n6. Handle `SkillsDiscoveredMsg`: Populate model items.",
-        "testStrategy": "State-machine unit tests: Create a model, pass a specific Msg, assert the resulting Model state (cursor moved, status changed) and returned Cmd.",
-        "priority": "medium",
-        "dependencies": [
-          4
-        ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Implement Update Skeleton and Navigation Logic",
-            "description": "Establish the main Update loop structure and implement handling for global application state and list navigation.",
+            "title": "Define TUI Model Structure and Initialization",
+            "description": "Define the primary Bubble Tea model struct and its initialization logic.",
             "dependencies": [],
-            "details": "Create `internal/skillporter/tui/model/update.go`. Implement the primary `Update(msg tea.Msg)` function with a type switch. Handle `tea.WindowSizeMsg` to update model dimensions. Handle `tea.KeyMsg` for global exits (Ctrl+C, 'q') and navigation inputs (Up/Down arrows, 'j', 'k'). Ensure cursor bounds checking prevents index out-of-range errors.",
+            "details": "Create `internal/skillportertui/ui/model.go`. Define the `Model` struct containing fields for `AppConfig`, a slice of `domain.SkillDir` for the list data, a `cursor` integer for navigation state, and an `err` field. Implement the `Init()` method to return a `tea.Cmd` that triggers the skill discovery process.",
             "status": "pending",
-            "testStrategy": "Unit test: Initialize model with 5 dummy items. Send 'j' Msg and assert cursor index increments. Send 'q' Msg and assert tea.Quit command is returned."
+            "testStrategy": "Unit test `Init` to ensure it returns the expected command type. Verify struct fields are initialized correctly with zero values.",
+            "parentId": "undefined"
           },
           {
             "id": 2,
-            "title": "Implement Conversion Action Key Handlers",
-            "description": "Add logic to interpret specific action keys that trigger conversion processes or modify item states.",
+            "title": "Implement List View Rendering with Lip Gloss",
+            "description": "Develop the visual rendering logic for the skill list using Lip Gloss styling.",
             "dependencies": [
               1
             ],
-            "details": "Extend the key handling logic to support action keys: 'c' (convert using default), 's' (mark as skipped), and 'g'/'a' (set specific targets). Ensure these inputs update the selected item's immediate state (e.g., setting status to 'pending_conversion') and return the appropriate `tea.Cmd` to initiate the actual work.",
+            "details": "Implement the `View() string` method in `internal/skillportertui/ui/view.go`. Iterate over the `skills` slice defined in the model. Use `lipgloss` to define styles for normal and selected rows. Render columns for Name, Platform, and Status, highlighting the row corresponding to the current `cursor` index.",
             "status": "pending",
-            "testStrategy": "Unit test: Select an item and send 's' Msg. Assert item status becomes 'skipped'. Send 'c' Msg and assert a non-nil command is returned."
+            "testStrategy": "Visual verification by printing the output of `View()` with a mock model containing sample data to ensure styles and highlighting appear as expected.",
+            "parentId": "undefined"
           },
           {
             "id": 3,
-            "title": "Handle Asynchronous Command Results and State Updates",
-            "description": "Implement handling for custom message types resulting from asynchronous operations to update the UI state.",
+            "title": "Implement Update Loop and Navigation Logic",
+            "description": "Implement the update loop to handle keyboard navigation and state changes.",
             "dependencies": [
-              1,
+              1
+            ],
+            "details": "Implement the `Update(msg tea.Msg)` method in `model.go`. specific handlers for `tea.KeyMsg`. Map 'up', 'down', 'k', and 'j' keys to increment/decrement the `cursor` index, ensuring it stays within the bounds of the `skills` slice. Add handlers for 'q' and 'ctrl+c' to quit the application.",
+            "status": "pending",
+            "testStrategy": "Unit tests for the `Update` function: pass key messages (up/down) and assert that the `cursor` value changes correctly and respects list boundaries.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 3,
+        "expansionPrompt": "Separate into: 1) Model definition and state management, 2) List view rendering (using Lip Gloss), 3) Update loop logic for basic navigation.",
+        "updatedAt": "2025-12-11T01:29:41.830Z"
+      },
+      {
+        "id": "6",
+        "title": "Implement TUI Conversion Interaction and Details Panel",
+        "description": "Connect the TUI list to the conversion engine and display results.",
+        "details": "Update `ui/model.go` to handle key `c`. Trigger `conversion.ExecuteConversion` in a `tea.Cmd`. Handle `SkillConvertedMsg` and `ConversionErrorMsg` to update skill status (Pending -> Running -> Success/Failed). Implement `Skill Detail Panel` in `view.go` to show the output path or error logs of the selected skill. Implement the Footer to show summary counts.",
+        "testStrategy": "Unit tests for `Update`: verify triggering conversion changes status to 'Running' and receiving a result message updates it to 'Success'/'Failed' and increments summary counters.",
+        "priority": "medium",
+        "dependencies": [
+          "5"
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Async Conversion Command Trigger",
+            "description": "Create the Bubble Tea command structure to execute conversions asynchronously without freezing the UI.",
+            "dependencies": [],
+            "details": "Create a `convertSkillCmd(skill *domain.SkillDir) tea.Cmd` function that wraps the `conversion.ExecuteConversion` logic (from Task 4). In `ui/model.go`'s `Update` function, handle the 'c' key press. When pressed, verify the selected item is valid, immediately set its status to 'Running' (optimistic update), and return the `convertSkillCmd` to the Bubble Tea runtime.",
+            "status": "pending",
+            "testStrategy": "Unit test the `Update` function: simulate a 'c' key press and assert that it returns a non-nil `tea.Cmd` and changes the selected item's status to 'Running'.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement Conversion Status Message Handling",
+            "description": "Handle the asynchronous result messages from the conversion process to update application state and counters.",
+            "dependencies": [
+              1
+            ],
+            "details": "Define `SkillConvertedMsg` and `ConversionErrorMsg` structs containing the skill ID and result data. In the `Update` loop, add cases for these messages. When received, locate the specific skill in the model's slice and update its status to 'Success' or 'Failed' along with the result output/error log. Implement logic to increment `SuccessCount` and `FailCount` in the model.",
+            "status": "pending",
+            "testStrategy": "Create mock `SkillConvertedMsg` and `ConversionErrorMsg` objects and pass them to the `Update` function. specific assertions: verify the target skill status updates correctly and the summary counters increment.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement Details Panel and Footer View",
+            "description": "Create the visual components to display detailed logs for the selected skill and global summary statistics.",
+            "dependencies": [
               2
             ],
-            "details": "Implement handlers for `StartConversionMsg`, `SkillConvertedMsg`, and `SkillsDiscoveredMsg`. When `SkillConvertedMsg` is received, update the specific item's status (success/failed), append error logs if applicable, and update the global `Summary` counters. When `SkillsDiscoveredMsg` is received, populate the model's `Items` slice.",
+            "details": "Modify `ui/view.go` to split the interface (likely using `lipgloss.JoinHorizontal`). The new Details Panel should render the `OutputPath` (if success) or `ErrorLog` (if failed) of the *currently selected* skill. Implement a status bar footer that renders the `Total`, `Success`, and `Failed` counts derived from the model state.",
             "status": "pending",
-            "testStrategy": "Unit test: Create a model with a 'running' item. Pass a `SkillConvertedMsg` indicating failure. Assert item status updates to 'failed' and Summary.Failed increments by 1."
+            "testStrategy": "Visual verification: Ensure the details pane updates content dynamically as the user navigates the list (up/down) and that the footer stays pinned to the bottom with correct formatting.",
+            "parentId": "undefined"
           }
-        ]
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 3,
+        "expansionPrompt": "Split into: 1) Async command triggering mechanism (`tea.Cmd`), 2) Message handling loop for status updates, 3) Details pane rendering logic.",
+        "updatedAt": "2025-12-11T01:30:40.525Z"
       },
       {
-        "id": 6,
-        "title": "Implement TUI Views and Layout",
-        "description": "Create the visual rendering logic for the list, details, and summary panels.",
-        "details": "1. Implement `internal/skillporter/tui/view/layout.go`: Orchestrate Header, List, Detail, Footer.\n2. Implement `list_view.go`: Render the list of skills. Use basic strings initially.\n3. Implement `detail_view.go`: Show details of the currently selected skill (path, target, error logs).\n4. Implement `summary_view.go`: Show counts (Success/Failed/Skipped).\n5. Ensure responsive layout that fits the terminal window.",
-        "testStrategy": "Golden file testing or string matching assertions to verify that the View returns expected strings for given Model states.",
+        "id": "7",
+        "title": "Create CLI Entrypoint and MVP Integration",
+        "description": "Wire everything together in `main.go` to create a runnable binary.",
+        "details": "Implement `cmd/skill-porter-tui/main.go`. Call `config.LoadFromFlagsAndEnv`. Initialize `ui.NewModel`. Run `tea.NewProgram`. On program exit, check the final model summary; if `Failed > 0`, `os.Exit(1)`. Ensure `stdout` is used for the TUI and `stderr` or a file for logs.",
+        "testStrategy": "Build the binary. Run E2E manual test: launch tool, discover skills, convert one, and verify exit code matches success/failure of the conversion.",
         "priority": "medium",
         "dependencies": [
-          5
+          "6"
         ],
-        "status": "pending",
+        "status": "done",
+        "subtasks": [],
+        "complexity": 3,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed.",
+        "updatedAt": "2025-12-11T01:31:09.455Z"
+      },
+      {
+        "id": "8",
+        "title": "Implement Advanced TUI Actions (Override, Auto-Convert, Rescan)",
+        "description": "Add support for target overrides (`g`/`a`), auto-convert remaining, and rescan (`r`).",
+        "details": "Update `ui/update.go`: Add handlers for `g` (force Gemini) and `a` (force Claude). Implement 'Auto-Convert Remaining' logic: iterate through pending skills and return a sequence of `tea.Cmd` batch or sequential triggers. Implement `r` to clear state and re-trigger discovery command.",
+        "testStrategy": "Unit tests for `Update`: verify `g` triggers conversion with specific target. Verify rescan clears the skill list and statuses.",
+        "priority": "medium",
+        "dependencies": [
+          "6"
+        ],
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Implement Layout Manager and Main View Orchestration",
-            "description": "Create the core layout logic and LayoutManager to handle terminal sizing and coordinate the rendering of sub-views.",
+            "title": "Implement Target Overrides and Auto-Convert Batch Logic",
+            "description": "Add TUI handlers for specific target overrides and implement the batch command generation for auto-converting all pending skills.",
             "dependencies": [],
-            "details": "Define a `LayoutManager` in `internal/skillporter/tui/view/layout.go` that accepts screen dimensions from the Model. Implement the top-level `View()` method to calculate available space for Header, List, Detail, and Footer sections. Use string joining utilities (like lipgloss or manual string builders) to stitch components together, ensuring the layout adapts to changes in terminal window size.",
+            "details": "Modify `ui/update.go` to intercept `g` and `a` keys. `g` should generate a conversion command for the selected skill with `target=gemini`, and `a` with `target=claude`. Implement the 'Auto-Convert' logic: iterate through the `Model.skills` slice, identify items with `Pending` status, and return a `tea.Batch` (or sequence) of conversion commands using the builder from Task 4. Ensure this logic is non-blocking to the UI thread.",
             "status": "pending",
-            "testStrategy": "Golden file testing with different screen dimension mocks to ensure areas are calculated and joined correctly."
+            "testStrategy": "Unit test `Update` with a mock model state. Verify pressing `g` creates a command with the specific target flag. Verify the auto-convert action returns a slice of commands matching the count of pending items.",
+            "parentId": "undefined"
           },
           {
             "id": 2,
-            "title": "Implement Skills List View Component",
-            "description": "Develop the list rendering logic to display the scrollable list of skills with basic visual indicators.",
-            "dependencies": [
-              1
-            ],
-            "details": "Implement `list_view.go` with a function signature like `RenderList(m Model, width int) string`. It should iterate through `m.Skills`, applying a visual indicator (e.g., `> `) for the item matching `m.Cursor`. Render basic text representations for status (e.g., `[pending]`, `[done]`) before full styling is applied in a later task. Ensure text truncates or wraps based on the width argument.",
-            "status": "pending",
-            "testStrategy": "String assertion tests verifying the output string contains the expected skill names and the cursor marker appears at the correct index."
-          },
-          {
-            "id": 3,
-            "title": "Implement Detail Panel and Status Bar Components",
-            "description": "Create the auxiliary view components for showing selected item details and global application status.",
-            "dependencies": [
-              1
-            ],
-            "details": "Implement `detail_view.go` to render the selected skill's path, target, and error logs. Implement `summary_view.go` to calculate and display aggregate counts (Success/Failed/Skipped) based on the Model state. Integrate these functions into the main `LayoutManager` to fill the Detail and Footer areas defined in the parent task.",
-            "status": "pending",
-            "testStrategy": "Unit tests feeding specific Model states (e.g., 1 failed item, selected item X) and asserting the returned string contains the correct stats and detail text."
-          }
-        ]
-      },
-      {
-        "id": 7,
-        "title": "Implement TUI Theming and Styling",
-        "description": "Apply Lip Gloss styles to the TUI to distinguish statuses and sections.",
-        "details": "1. Implement `internal/skillporter/tui/theme`.\n2. Define `StatusStyle`: Green for Success, Red for Failed, Grey for Skipped, Yellow for Running.\n3. Style Header (bold/colored) and Detail panel (borders/padding).\n4. Integrate styles into the `View` functions created in Task 6.",
-        "testStrategy": "Visual verification (running the binary) and checking that style definitions covers all status enums.",
-        "priority": "medium",
-        "dependencies": [
-          6
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 8,
-        "title": "Implement CLI Entry Point",
-        "description": "Wire the configuration, model, and Bubble Tea program into the main binary.",
-        "details": "1. Implement `cmd/skill-porter-tui/main.go`.\n2. Parse flags using `config.NewConfigFromFlags()`.\n3. Handle initial errors (e.g. invalid root).\n4. Initialize `model.NewModel(cfg)`.\n5. Create `tea.NewProgram(m)` and run it.\n6. On exit, ensure non-zero exit code if `Summary.Failed > 0`.",
-        "testStrategy": "Build the binary and run end-to-end smoke tests against a test directory to verify startup and exit codes.",
-        "priority": "high",
-        "dependencies": [
-          7
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 9,
-        "title": "Implement Auto-Convert Mode",
-        "description": "Add functionality to automatically convert remaining pending skills, mimicking the bash script's 'Convert ALL' feature.",
-        "details": "1. Update `Model` to include `AutoConvertEnabled` bool and `AutoTarget`.\n2. Add keybinding (e.g., `A`) to trigger auto-mode.\n3. In `Update` loop: When a conversion finishes and auto-mode is on, automatically find the next `pending` skill and dispatch `StartConversionMsg` for it.\n4. Ensure UI reflects the batch processing state.",
-        "testStrategy": "Unit tests on the Update loop: Trigger completion of task N, assert that task N+1 is automatically started if auto-mode is enabled.",
-        "priority": "medium",
-        "dependencies": [
-          5
-        ],
-        "status": "pending",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Implement Auto-Convert State and Next-Item Selector",
-            "description": "Define the state variables for auto-conversion and implement the logic to identify the next eligible skill for processing.",
+            "title": "Implement Rescan and State Reset Logic",
+            "description": "Implement the 'r' key handler to clear the current application state and re-initialize the skill discovery process.",
             "dependencies": [],
-            "details": "Update the TUI Model struct to include `AutoConvertEnabled` boolean. Create a helper function (e.g., `GetNextPendingSkill`) that iterates through the skills list starting from the current index to find the next item with status `pending`. This separates the selection logic from the event loop.",
+            "details": "In `ui/update.go`, add a handler for the `r` key. This function must explicitly clear the `Model.skills` slice, reset navigation cursors (index 0), and return the `DiscoverSkills` `tea.Cmd` (defined in Task 3). This ensures the file system is re-walked and the list is refreshed without restarting the application.",
             "status": "pending",
-            "testStrategy": "Unit test the helper function with various skill list configurations (all pending, mixed statuses, none pending) to ensure it returns the correct index or nil."
-          },
-          {
-            "id": 2,
-            "title": "Integrate Auto-Convert Logic into Update Loop and UI",
-            "description": "Connect the auto-convert state to the Bubble Tea update loop and add user controls for toggling the mode.",
-            "dependencies": [
-              1
-            ],
-            "details": "In `Update()`, map keybinding 'A' to toggle `AutoConvertEnabled`. Modify the `SkillConvertedMsg` handler: if auto-mode is active, call the selector helper; if a pending skill is found, dispatch a new `StartConversionMsg`. Ensure the UI View renders a 'Batch Mode Active' indicator when enabled.",
-            "status": "pending",
-            "testStrategy": "State-machine test: Initialize model with auto-mode on, simulate a `SkillConvertedMsg`, and assert that the Update function returns a command to start the next conversion."
+            "testStrategy": "Initialize a Model with populated data. Trigger the `r` key event in `Update`. Assert that the returned model has an empty skill list and the returned command is of the expected discovery type.",
+            "parentId": "undefined"
           }
-        ]
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 2,
+        "expansionPrompt": "Separate: 1) Batch processing logic for 'Auto-Convert' (generating multiple commands), 2) State reset logic for 'Rescan'.",
+        "updatedAt": "2025-12-11T01:31:49.783Z"
       },
       {
-        "id": 10,
-        "title": "Implement Gum Integration and Documentation",
-        "description": "Add optional Gum integration for confirmations and finalize documentation.",
-        "details": "1. Update `QuitMsg` handling: If pending skills exist, optionally check for `gum` binary.\n2. If `gum` exists, run `gum confirm`; otherwise fallback to internal text prompt.\n3. Write `docs/skill-porter-tui.md` describing usage, flags, and keybindings.\n4. Add README snippet.",
-        "testStrategy": "Manual verification of the quit flow with and without `gum` installed. Verify docs match implemented flags.",
+        "id": "9",
+        "title": "Implement Gum Interoperability and Debug Logging",
+        "description": "Add optional Gum integration for confirmations and debug flag support.",
+        "details": "Implement `internal/skillportertui/guminterop/confirm.go`. Check if `gum` binary exists in PATH. If so, use `exec.Command(\"gum\", \"confirm\"...)` for quit/bulk actions. Fallback to internal TUI confirmation if missing. Update `config` to handle `--debug`. Update logger to respect debug mode (more verbose).",
+        "testStrategy": "Test with and without `gum` installed (mocking PATH). Verify debug logs contain command arguments when flag is set.",
         "priority": "low",
         "dependencies": [
-          8
+          "7",
+          "8"
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [],
+        "complexity": 4,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed.",
+        "updatedAt": "2025-12-11T01:32:26.844Z"
+      },
+      {
+        "id": "10",
+        "title": "Final Documentation, Polish, and Edge Case Testing",
+        "description": "Complete documentation and ensure robustness.",
+        "details": "Write `docs/skill-porter-tui.md` with usage instructions, keybindings, and screenshots. Review Lip Gloss styles for consistent theming (colors for success/fail). Expand test coverage to handle edge cases like zero skills found, read-only directories, or immediate user quit.",
+        "testStrategy": "Manual review of documentation. Run coverage report and add tests to meet the 80% threshold defined in the PRD.",
+        "priority": "low",
+        "dependencies": [
+          "9"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "complexity": 3,
+        "recommendedSubtasks": 0,
+        "expansionPrompt": "No expansion needed.",
+        "updatedAt": "2025-12-11T01:32:54.626Z"
       }
     ],
     "metadata": {
-      "created": "2025-12-10T22:33:12.845Z",
-      "updated": "2025-12-10T22:33:12.845Z",
-      "description": "Tasks for master context"
+      "version": "1.0.0",
+      "lastModified": "2025-12-11T01:32:54.626Z",
+      "taskCount": 10,
+      "completedCount": 10,
+      "tags": [
+        "master"
+      ]
     }
   }
 }

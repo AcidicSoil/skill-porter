@@ -1,0 +1,127 @@
+# Skill Porter TUI - Interactive Conversion Tool
+
+This document details the **Skill Porter TUI**, a new interactive terminal user interface built to streamline the process of discovering and converting AI agent skills between Claude Code and Gemini CLI formats.
+
+## 🚀 Overview
+
+The Skill Porter TUI wraps the core `skill-porter` CLI functionality in a visual, interactive dashboard. Instead of running individual commands for each skill, you can now:
+
+1.  **Discover** all skills in a directory tree automatically.
+2.  **Visualize** their current platform (Claude, Gemini, or Universal) and conversion status.
+3.  **Convert** skills individually or in bulk with a single keystroke.
+4.  **Monitor** the conversion process with real-time feedback.
+
+Built with **Go** and **Bubble Tea**, it offers a robust and responsive user experience.
+
+---
+
+## 📦 Installation & Setup
+
+### Prerequisites
+- **Go 1.23+**: Required to build the tool.
+- **Node.js**: The underlying `skill-porter` CLI must be installed and available in your PATH.
+  ```bash
+  npm install -g skill-porter
+  ```
+
+### Building the Tool
+Clone the repository and build the binary:
+
+```bash
+# Navigate to the project root
+cd skill-porter
+
+# Download Go dependencies
+go mod tidy
+
+# Build the binary
+go build -o skill-porter-tui ./cmd/skill-porter-tui
+```
+
+You can now move `skill-porter-tui` to your PATH or run it locally.
+
+---
+
+## 🎮 Usage Guide
+
+Start the application by running the binary. By default, it scans the current directory.
+
+```bash
+./skill-porter-tui
+```
+
+### Command Line Flags
+
+Customize the startup behavior with these flags:
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--root` | **Path**. The root directory to scan for skills. Defaults to current working directory. | `./skill-porter-tui --root ~/my-projects` |
+| `--recursive` | **Boolean**. Whether to scan directories recursively. Default: `true`. | `./skill-porter-tui --recursive=false` |
+| `--target` | **String**. Default target platform (`gemini`, `claude`, `auto`). `auto` flips the current platform. | `./skill-porter-tui --target gemini` |
+| `--out` | **Path**. Base directory for conversion output. If omitted, converts in-place (or creates sibling dirs). | `./skill-porter-tui --out ./converted_skills` |
+| `--auto` | **Boolean**. "Auto-Pilot" mode. Immediately starts converting all pending skills on launch. | `./skill-porter-tui --auto` |
+| `--debug` | **Boolean**. Enables verbose logging to `debug.log` in the current directory. | `./skill-porter-tui --debug` |
+
+### Interactive Keybindings
+
+Once the TUI is running, use the following keys to navigate and control the tool:
+
+#### Navigation
+- **`↑`** or **`k`**: Move selection cursor up.
+- **`↓`** or **`j`**: Move selection cursor down.
+
+#### Actions
+- **`c`**: **Convert**. Triggers conversion for the selected skill using the default or auto-determined target.
+- **`g`**: **Force Gemini**. Explicitly converts the selected skill to a Gemini Extension.
+- **`a`**: **Force Claude**. Explicitly converts the selected skill to a Claude Skill.
+- **`A`**: **Convert All**. Triggers a batch job to convert *all* pending skills in the list.
+- **`r`**: **Rescan**. Clears the list and re-scans the directory tree. Useful if you've added files externally.
+
+#### System
+- **`q`** or **`ctrl+c`**: Quit the application.
+
+---
+
+## 🖥️ Interface Guide
+
+The screen is divided into three sections:
+
+### 1. Skill List (Left Pane)
+Displays the directory of discovered skills.
+- **Name**: The folder name of the skill.
+- **Platform**: Detected type (`Claude`, `Gemini`, or `Universal`).
+- **Status Tag**:
+  - `[Pending]`: Ready to process (Grey).
+  - `[Running]`: Conversion in progress (Orange).
+  - `[Success]`: Completed successfully (Green).
+  - `[Failed]`: Error occurred (Red).
+
+### 2. Details Panel (Right Pane)
+Shows specific information for the **currently selected** skill.
+- **Paths**: Source path and output destination.
+- **Logs**: If a conversion succeeds, it shows the CLI output. If it fails, it displays the error log for debugging.
+
+### 3. Footer (Bottom)
+- **Stats**: Real-time counters for Total, Success, Failed, and Pending tasks.
+- **Help**: Quick reference for keybindings.
+
+---
+
+## 🔧 Architecture & Troubleshooting
+
+### Architecture
+The tool follows the **Model-View-Update (ELM)** architecture via the Bubble Tea framework:
+- **Discovery**: Runs on a separate thread to prevent UI freezing during file scans.
+- **Conversion**: Spawns asynchronous `os/exec` processes to run the Node.js `skill-porter` CLI.
+- **Messaging**: Updates are sent back to the UI loop via `tea.Msg` to refresh status and logs.
+
+### Debugging
+If the tool behaves unexpectedly (e.g., hangs or fails to find skills):
+1. Run with debug mode: `./skill-porter-tui --debug`
+2. Check the `debug.log` file created in the working directory.
+3. Ensure the underlying `skill-porter` command works manually in your terminal.
+
+---
+
+*Generated by Task Master AI - December 10, 2025*

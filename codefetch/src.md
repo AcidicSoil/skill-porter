@@ -496,598 +496,6 @@ export { PLATFORM_TYPES } from './analyzers/detector.js';
 export default SkillPorter;
 ```
 
-src/analyzers/detector.js
-```
-/**
- * Platform Detection
- * Analyzes a directory to determine if it's a Claude skill, Gemini extension, or universal
- */
-
-import fs from 'fs/promises';
-import path from 'path';
-
-export const PLATFORM_TYPES = {
-  CLAUDE: 'claude',
-  GEMINI: 'gemini',
-  UNIVERSAL: 'universal',
-  UNKNOWN: 'unknown'
-};
-
-export class PlatformDetector {
-  /**
-   * Detect the platform type of a skill/extension directory
-   * @param {string} dirPath - Path to the directory to analyze
-   * @returns {Promise<{platform: string, files: object, confidence: string}>}
-   */
-  async detect(dirPath) {
-    const detection = {
-      platform: PLATFORM_TYPES.UNKNOWN,
-      files: {
-        claude: [],
-        gemini: [],
-        shared: []
-      },
-      confidence: 'low',
-      metadata: {}
-    };
-
-    try {
-      const exists = await this._checkDirectoryExists(dirPath);
-      if (!exists) {
-        throw new Error(`Directory not found: ${dirPath}`);
-      }
-
-      // Check for Claude-specific files
-      const claudeFiles = await this._detectClaudeFiles(dirPath);
-      detection.files.claude = claudeFiles;
-
-      // Check for Gemini-specific files
-      const geminiFiles = await this._detectGeminiFiles(dirPath);
-      detection.files.gemini = geminiFiles;
-
-      // Check for shared files
-      const sharedFiles = await this._detectSharedFiles(dirPath);
-      detection.files.shared = sharedFiles;
-
-      // Determine platform type
-      const hasClaude = claudeFiles.length > 0;
-      const hasGemini = geminiFiles.length > 0;
-
-      if (hasClaude && hasGemini) {
-        detection.platform = PLATFORM_TYPES.UNIVERSAL;
-        detection.confidence = 'high';
-      } else if (hasClaude) {
-        detection.platform = PLATFORM_TYPES.CLAUDE;
-        detection.confidence = 'high';
-      } else if (hasGemini) {
-        detection.platform = PLATFORM_TYPES.GEMINI;
-        detection.confidence = 'high';
-      } else {
-        detection.platform = PLATFORM_TYPES.UNKNOWN;
-        detection.confidence = 'low';
-      }
-
-      // Extract metadata
-      detection.metadata = await this._extractMetadata(dirPath, detection.platform);
-
-      return detection;
-    } catch (error) {
-      throw new Error(`Detection failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Check if directory exists
-   */
-  async _checkDirectoryExists(dirPath) {
-    try {
-      const stats = await fs.stat(dirPath);
-      return stats.isDirectory();
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Detect Claude-specific files
-   */
-  async _detectClaudeFiles(dirPath) {
-    const claudeFiles = [];
-
-    // Check for SKILL.md
-    const skillPath = path.join(dirPath, 'SKILL.md');
-    if (await this._fileExists(skillPath)) {
-      const hasValidFrontmatter = await this._hasYAMLFrontmatter(skillPath);
-      if (hasValidFrontmatter) {
-        claudeFiles.push({ file: 'SKILL.md', type: 'entry', valid: true });
-      } else {
-        claudeFiles.push({ file: 'SKILL.md', type: 'entry', valid: false, issue: 'Missing or invalid YAML frontmatter' });
-      }
-    }
-
-    // Check for .claude-plugin/marketplace.json
-    const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
-    if (await this._fileExists(marketplacePath)) {
-      const isValidJSON = await this._isValidJSON(marketplacePath);
-      if (isValidJSON) {
-        claudeFiles.push({ file: '.claude-plugin/marketplace.json', type: 'manifest', valid: true });
-      } else {
-        claudeFiles.push({ file: '.claude-plugin/marketplace.json', type: 'manifest', valid: false, issue: 'Invalid JSON' });
-      }
-    }
-
-    return claudeFiles;
-  }
-
-  /**
-   * Detect Gemini-specific files
-   */
-  async _detectGeminiFiles(dirPath) {
-    const geminiFiles = [];
-
-    // Check for gemini-extension.json
-    const manifestPath = path.join(dirPath, 'gemini-extension.json');
-    if (await this._fileExists(manifestPath)) {
-      const isValidJSON = await this._isValidJSON(manifestPath);
-      if (isValidJSON) {
-        geminiFiles.push({ file: 'gemini-extension.json', type: 'manifest', valid: true });
-      } else {
-        geminiFiles.push({ file: 'gemini-extension.json', type: 'manifest', valid: false, issue: 'Invalid JSON' });
-      }
-    }
-
-    // Check for GEMINI.md
-    const geminiMdPath = path.join(dirPath, 'GEMINI.md');
-    if (await this._fileExists(geminiMdPath)) {
-      geminiFiles.push({ file: 'GEMINI.md', type: 'context', valid: true });
-    }
-
-    return geminiFiles;
-  }
-
-  /**
-   * Detect shared files (common to both platforms)
-   */
-  async _detectSharedFiles(dirPath) {
-    const sharedFiles = [];
-
-    // Check for package.json
-    const packagePath = path.join(dirPath, 'package.json');
-    if (await this._fileExists(packagePath)) {
-      sharedFiles.push({ file: 'package.json', type: 'dependency' });
-    }
-
-    // Check for shared directory
-    const sharedDirPath = path.join(dirPath, 'shared');
-    if (await this._checkDirectoryExists(sharedDirPath)) {
-      sharedFiles.push({ file: 'shared/', type: 'directory' });
-    }
-
-    // Check for MCP server directory
-    const mcpServerPath = path.join(dirPath, 'mcp-server');
-    if (await this._checkDirectoryExists(mcpServerPath)) {
-      sharedFiles.push({ file: 'mcp-server/', type: 'directory' });
-    }
-
-    return sharedFiles;
-  }
-
-  /**
-   * Extract metadata from files
-   */
-  async _extractMetadata(dirPath, platform) {
-    const metadata = {};
-
-    if (platform === PLATFORM_TYPES.CLAUDE || platform === PLATFORM_TYPES.UNIVERSAL) {
-      // Try to extract from SKILL.md
-      const skillPath = path.join(dirPath, 'SKILL.md');
-      if (await this._fileExists(skillPath)) {
-        const frontmatter = await this._extractYAMLFrontmatter(skillPath);
-        if (frontmatter) {
-          metadata.claude = frontmatter;
-        }
-      }
-
-      // Try to extract from marketplace.json
-      const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
-      if (await this._fileExists(marketplacePath)) {
-        const content = await fs.readFile(marketplacePath, 'utf8');
-        try {
-          const json = JSON.parse(content);
-          metadata.claudeMarketplace = json;
-        } catch {}
-      }
-    }
-
-    if (platform === PLATFORM_TYPES.GEMINI || platform === PLATFORM_TYPES.UNIVERSAL) {
-      // Try to extract from gemini-extension.json
-      const manifestPath = path.join(dirPath, 'gemini-extension.json');
-      if (await this._fileExists(manifestPath)) {
-        const content = await fs.readFile(manifestPath, 'utf8');
-        try {
-          const json = JSON.parse(content);
-          metadata.gemini = json;
-        } catch {}
-      }
-    }
-
-    return metadata;
-  }
-
-  /**
-   * Check if file exists
-   */
-  async _fileExists(filePath) {
-    try {
-      await fs.access(filePath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Check if file is valid JSON
-   */
-  async _isValidJSON(filePath) {
-    try {
-      const content = await fs.readFile(filePath, 'utf8');
-      JSON.parse(content);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Check if file has YAML frontmatter
-   */
-  async _hasYAMLFrontmatter(filePath) {
-    try {
-      const content = await fs.readFile(filePath, 'utf8');
-      return /^---\n[\s\S]+?\n---/.test(content);
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Extract YAML frontmatter from file
-   */
-  async _extractYAMLFrontmatter(filePath) {
-    try {
-      const content = await fs.readFile(filePath, 'utf8');
-      const match = content.match(/^---\n([\s\S]+?)\n---/);
-      if (match) {
-        // Simple YAML parser for basic key-value pairs
-        const yaml = match[1];
-        const parsed = {};
-
-        const lines = yaml.split('\n');
-        let currentKey = null;
-        let currentValue = null;
-
-        for (const line of lines) {
-          if (line.trim().startsWith('-')) {
-            // Array item
-            if (currentKey && Array.isArray(parsed[currentKey])) {
-              parsed[currentKey].push(line.trim().substring(1).trim());
-            }
-          } else if (line.includes(':')) {
-            // Key-value pair
-            const [key, ...valueParts] = line.split(':');
-            const value = valueParts.join(':').trim();
-            currentKey = key.trim();
-
-            if (value === '') {
-              // Array or multi-line value
-              parsed[currentKey] = [];
-            } else {
-              parsed[currentKey] = value;
-            }
-          }
-        }
-
-        return parsed;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-}
-
-export default PlatformDetector;
-```
-
-src/analyzers/validator.js
-```
-/**
- * Validation Utilities
- * Validates that converted skills/extensions meet platform requirements
- */
-
-import fs from 'fs/promises';
-import path from 'path';
-import { PLATFORM_TYPES } from './detector.js';
-
-export class Validator {
-  constructor() {
-    this.errors = [];
-    this.warnings = [];
-  }
-
-  /**
-   * Validate a skill/extension for a specific platform
-   * @param {string} dirPath - Path to the directory to validate
-   * @param {string} platform - Target platform (claude, gemini, or universal)
-   * @returns {Promise<{valid: boolean, errors: array, warnings: array}>}
-   */
-  async validate(dirPath, platform) {
-    this.errors = [];
-    this.warnings = [];
-
-    try {
-      if (platform === PLATFORM_TYPES.CLAUDE || platform === PLATFORM_TYPES.UNIVERSAL) {
-        await this._validateClaude(dirPath);
-      }
-
-      if (platform === PLATFORM_TYPES.GEMINI || platform === PLATFORM_TYPES.UNIVERSAL) {
-        await this._validateGemini(dirPath);
-      }
-
-      return {
-        valid: this.errors.length === 0,
-        errors: this.errors,
-        warnings: this.warnings
-      };
-    } catch (error) {
-      this.errors.push(`Validation failed: ${error.message}`);
-      return {
-        valid: false,
-        errors: this.errors,
-        warnings: this.warnings
-      };
-    }
-  }
-
-  /**
-   * Validate Claude skill requirements
-   */
-  async _validateClaude(dirPath) {
-    // Check for SKILL.md
-    const skillPath = path.join(dirPath, 'SKILL.md');
-    if (!await this._fileExists(skillPath)) {
-      this.errors.push('Missing required file: SKILL.md');
-      return;
-    }
-
-    // Validate SKILL.md frontmatter
-    const content = await fs.readFile(skillPath, 'utf8');
-    const frontmatterMatch = content.match(/^---\n([\s\S]+?)\n---/);
-
-    if (!frontmatterMatch) {
-      this.errors.push('SKILL.md must have YAML frontmatter');
-      return;
-    }
-
-    const frontmatter = this._parseYAML(frontmatterMatch[1]);
-
-    // Check required frontmatter fields
-    if (!frontmatter.name) {
-      this.errors.push('SKILL.md frontmatter missing required field: name');
-    } else {
-      // Validate name format
-      if (!/^[a-z0-9-]+$/.test(frontmatter.name)) {
-        this.errors.push('Skill name must be lowercase letters, numbers, and hyphens only');
-      }
-      if (frontmatter.name.length > 64) {
-        this.errors.push('Skill name must be 64 characters or less');
-      }
-    }
-
-    if (!frontmatter.description) {
-      this.errors.push('SKILL.md frontmatter missing required field: description');
-    } else {
-      if (frontmatter.description.length > 1024) {
-        this.errors.push('Description must be 1024 characters or less');
-      }
-      if (frontmatter.description.length < 50) {
-        this.warnings.push('Description should be descriptive (at least 50 characters recommended)');
-      }
-    }
-
-    // Check for marketplace.json (optional but recommended)
-    const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
-    if (!await this._fileExists(marketplacePath)) {
-      this.warnings.push('Missing .claude-plugin/marketplace.json (recommended for MCP server integration)');
-    } else {
-      await this._validateMarketplaceJSON(marketplacePath);
-    }
-
-    // Validate file paths use forward slashes
-    if (content.includes('\\')) {
-      this.warnings.push('Use forward slashes (/) for file paths, not backslashes (\\)');
-    }
-  }
-
-  /**
-   * Validate Gemini extension requirements
-   */
-  async _validateGemini(dirPath) {
-    // Check for gemini-extension.json
-    const manifestPath = path.join(dirPath, 'gemini-extension.json');
-    if (!await this._fileExists(manifestPath)) {
-      this.errors.push('Missing required file: gemini-extension.json');
-      return;
-    }
-
-    // Validate manifest JSON
-    const content = await fs.readFile(manifestPath, 'utf8');
-    let manifest;
-
-    try {
-      manifest = JSON.parse(content);
-    } catch (error) {
-      this.errors.push(`Invalid JSON in gemini-extension.json: ${error.message}`);
-      return;
-    }
-
-    // Check required fields
-    if (!manifest.name) {
-      this.errors.push('gemini-extension.json missing required field: name');
-    } else {
-      // Validate name matches directory
-      const dirName = path.basename(dirPath);
-      if (manifest.name !== dirName) {
-        this.warnings.push(`Extension name "${manifest.name}" should match directory name "${dirName}"`);
-      }
-    }
-
-    if (!manifest.version) {
-      this.errors.push('gemini-extension.json missing required field: version');
-    }
-
-    // Validate MCP servers configuration
-    if (manifest.mcpServers) {
-      for (const [serverName, config] of Object.entries(manifest.mcpServers)) {
-        if (!config.command) {
-          this.errors.push(`MCP server "${serverName}" missing required field: command`);
-        }
-
-        if (config.args) {
-          // Check for proper variable substitution
-          const argsStr = JSON.stringify(config.args);
-          if (argsStr.includes('mcp-server') && !argsStr.includes('${extensionPath}')) {
-            this.warnings.push(`MCP server "${serverName}" should use \${extensionPath} variable for paths`);
-          }
-        }
-      }
-    }
-
-    // Validate settings if present
-    if (manifest.settings) {
-      if (!Array.isArray(manifest.settings)) {
-        this.errors.push('settings must be an array');
-      } else {
-        manifest.settings.forEach((setting, index) => {
-          if (!setting.name) {
-            this.errors.push(`Setting at index ${index} missing required field: name`);
-          }
-          if (!setting.description) {
-            this.warnings.push(`Setting "${setting.name}" should have a description`);
-          }
-        });
-      }
-    }
-
-    // Check for context file
-    const contextFileName = manifest.contextFileName || 'GEMINI.md';
-    const contextPath = path.join(dirPath, contextFileName);
-    if (!await this._fileExists(contextPath)) {
-      this.warnings.push(`Missing context file: ${contextFileName} (recommended for providing context to Gemini)`);
-    }
-
-    // Validate excludeTools if present
-    if (manifest.excludeTools) {
-      if (!Array.isArray(manifest.excludeTools)) {
-        this.errors.push('excludeTools must be an array');
-      }
-    }
-  }
-
-  /**
-   * Validate marketplace.json structure
-   */
-  async _validateMarketplaceJSON(filePath) {
-    const content = await fs.readFile(filePath, 'utf8');
-    let marketplace;
-
-    try {
-      marketplace = JSON.parse(content);
-    } catch (error) {
-      this.errors.push(`Invalid JSON in marketplace.json: ${error.message}`);
-      return;
-    }
-
-    // Check required fields
-    if (!marketplace.name) {
-      this.errors.push('marketplace.json missing required field: name');
-    }
-
-    if (!marketplace.metadata) {
-      this.errors.push('marketplace.json missing required field: metadata');
-    } else {
-      if (!marketplace.metadata.description) {
-        this.warnings.push('marketplace.json metadata should include description');
-      }
-      if (!marketplace.metadata.version) {
-        this.warnings.push('marketplace.json metadata should include version');
-      }
-    }
-
-    if (!marketplace.plugins || !Array.isArray(marketplace.plugins)) {
-      this.errors.push('marketplace.json missing required field: plugins (array)');
-    } else {
-      marketplace.plugins.forEach((plugin, index) => {
-        if (!plugin.name) {
-          this.errors.push(`Plugin at index ${index} missing required field: name`);
-        }
-        if (!plugin.description) {
-          this.errors.push(`Plugin at index ${index} missing required field: description`);
-        }
-      });
-    }
-  }
-
-  /**
-   * Simple YAML parser for validation
-   */
-  _parseYAML(yaml) {
-    const parsed = {};
-    const lines = yaml.split('\n');
-    let currentKey = null;
-
-    for (const line of lines) {
-      if (line.trim().startsWith('-')) {
-        // Array item
-        if (currentKey && Array.isArray(parsed[currentKey])) {
-          parsed[currentKey].push(line.trim().substring(1).trim());
-        }
-      } else if (line.includes(':')) {
-        // Key-value pair
-        const [key, ...valueParts] = line.split(':');
-        const value = valueParts.join(':').trim();
-        currentKey = key.trim();
-
-        if (value === '') {
-          // Array or multi-line value
-          parsed[currentKey] = [];
-        } else {
-          parsed[currentKey] = value;
-        }
-      }
-    }
-
-    return parsed;
-  }
-
-  /**
-   * Check if file exists
-   */
-  async _fileExists(filePath) {
-    try {
-      await fs.access(filePath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-export default Validator;
-```
-
 src/converters/claude-to-gemini.js
 ```
 /**
@@ -2051,6 +1459,598 @@ For detailed extension architecture, please refer to \`docs/GEMINI_ARCHITECTURE.
 }
 
 export default GeminiToClaudeConverter;
+```
+
+src/analyzers/detector.js
+```
+/**
+ * Platform Detection
+ * Analyzes a directory to determine if it's a Claude skill, Gemini extension, or universal
+ */
+
+import fs from 'fs/promises';
+import path from 'path';
+
+export const PLATFORM_TYPES = {
+  CLAUDE: 'claude',
+  GEMINI: 'gemini',
+  UNIVERSAL: 'universal',
+  UNKNOWN: 'unknown'
+};
+
+export class PlatformDetector {
+  /**
+   * Detect the platform type of a skill/extension directory
+   * @param {string} dirPath - Path to the directory to analyze
+   * @returns {Promise<{platform: string, files: object, confidence: string}>}
+   */
+  async detect(dirPath) {
+    const detection = {
+      platform: PLATFORM_TYPES.UNKNOWN,
+      files: {
+        claude: [],
+        gemini: [],
+        shared: []
+      },
+      confidence: 'low',
+      metadata: {}
+    };
+
+    try {
+      const exists = await this._checkDirectoryExists(dirPath);
+      if (!exists) {
+        throw new Error(`Directory not found: ${dirPath}`);
+      }
+
+      // Check for Claude-specific files
+      const claudeFiles = await this._detectClaudeFiles(dirPath);
+      detection.files.claude = claudeFiles;
+
+      // Check for Gemini-specific files
+      const geminiFiles = await this._detectGeminiFiles(dirPath);
+      detection.files.gemini = geminiFiles;
+
+      // Check for shared files
+      const sharedFiles = await this._detectSharedFiles(dirPath);
+      detection.files.shared = sharedFiles;
+
+      // Determine platform type
+      const hasClaude = claudeFiles.length > 0;
+      const hasGemini = geminiFiles.length > 0;
+
+      if (hasClaude && hasGemini) {
+        detection.platform = PLATFORM_TYPES.UNIVERSAL;
+        detection.confidence = 'high';
+      } else if (hasClaude) {
+        detection.platform = PLATFORM_TYPES.CLAUDE;
+        detection.confidence = 'high';
+      } else if (hasGemini) {
+        detection.platform = PLATFORM_TYPES.GEMINI;
+        detection.confidence = 'high';
+      } else {
+        detection.platform = PLATFORM_TYPES.UNKNOWN;
+        detection.confidence = 'low';
+      }
+
+      // Extract metadata
+      detection.metadata = await this._extractMetadata(dirPath, detection.platform);
+
+      return detection;
+    } catch (error) {
+      throw new Error(`Detection failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check if directory exists
+   */
+  async _checkDirectoryExists(dirPath) {
+    try {
+      const stats = await fs.stat(dirPath);
+      return stats.isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Detect Claude-specific files
+   */
+  async _detectClaudeFiles(dirPath) {
+    const claudeFiles = [];
+
+    // Check for SKILL.md
+    const skillPath = path.join(dirPath, 'SKILL.md');
+    if (await this._fileExists(skillPath)) {
+      const hasValidFrontmatter = await this._hasYAMLFrontmatter(skillPath);
+      if (hasValidFrontmatter) {
+        claudeFiles.push({ file: 'SKILL.md', type: 'entry', valid: true });
+      } else {
+        claudeFiles.push({ file: 'SKILL.md', type: 'entry', valid: false, issue: 'Missing or invalid YAML frontmatter' });
+      }
+    }
+
+    // Check for .claude-plugin/marketplace.json
+    const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
+    if (await this._fileExists(marketplacePath)) {
+      const isValidJSON = await this._isValidJSON(marketplacePath);
+      if (isValidJSON) {
+        claudeFiles.push({ file: '.claude-plugin/marketplace.json', type: 'manifest', valid: true });
+      } else {
+        claudeFiles.push({ file: '.claude-plugin/marketplace.json', type: 'manifest', valid: false, issue: 'Invalid JSON' });
+      }
+    }
+
+    return claudeFiles;
+  }
+
+  /**
+   * Detect Gemini-specific files
+   */
+  async _detectGeminiFiles(dirPath) {
+    const geminiFiles = [];
+
+    // Check for gemini-extension.json
+    const manifestPath = path.join(dirPath, 'gemini-extension.json');
+    if (await this._fileExists(manifestPath)) {
+      const isValidJSON = await this._isValidJSON(manifestPath);
+      if (isValidJSON) {
+        geminiFiles.push({ file: 'gemini-extension.json', type: 'manifest', valid: true });
+      } else {
+        geminiFiles.push({ file: 'gemini-extension.json', type: 'manifest', valid: false, issue: 'Invalid JSON' });
+      }
+    }
+
+    // Check for GEMINI.md
+    const geminiMdPath = path.join(dirPath, 'GEMINI.md');
+    if (await this._fileExists(geminiMdPath)) {
+      geminiFiles.push({ file: 'GEMINI.md', type: 'context', valid: true });
+    }
+
+    return geminiFiles;
+  }
+
+  /**
+   * Detect shared files (common to both platforms)
+   */
+  async _detectSharedFiles(dirPath) {
+    const sharedFiles = [];
+
+    // Check for package.json
+    const packagePath = path.join(dirPath, 'package.json');
+    if (await this._fileExists(packagePath)) {
+      sharedFiles.push({ file: 'package.json', type: 'dependency' });
+    }
+
+    // Check for shared directory
+    const sharedDirPath = path.join(dirPath, 'shared');
+    if (await this._checkDirectoryExists(sharedDirPath)) {
+      sharedFiles.push({ file: 'shared/', type: 'directory' });
+    }
+
+    // Check for MCP server directory
+    const mcpServerPath = path.join(dirPath, 'mcp-server');
+    if (await this._checkDirectoryExists(mcpServerPath)) {
+      sharedFiles.push({ file: 'mcp-server/', type: 'directory' });
+    }
+
+    return sharedFiles;
+  }
+
+  /**
+   * Extract metadata from files
+   */
+  async _extractMetadata(dirPath, platform) {
+    const metadata = {};
+
+    if (platform === PLATFORM_TYPES.CLAUDE || platform === PLATFORM_TYPES.UNIVERSAL) {
+      // Try to extract from SKILL.md
+      const skillPath = path.join(dirPath, 'SKILL.md');
+      if (await this._fileExists(skillPath)) {
+        const frontmatter = await this._extractYAMLFrontmatter(skillPath);
+        if (frontmatter) {
+          metadata.claude = frontmatter;
+        }
+      }
+
+      // Try to extract from marketplace.json
+      const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
+      if (await this._fileExists(marketplacePath)) {
+        const content = await fs.readFile(marketplacePath, 'utf8');
+        try {
+          const json = JSON.parse(content);
+          metadata.claudeMarketplace = json;
+        } catch {}
+      }
+    }
+
+    if (platform === PLATFORM_TYPES.GEMINI || platform === PLATFORM_TYPES.UNIVERSAL) {
+      // Try to extract from gemini-extension.json
+      const manifestPath = path.join(dirPath, 'gemini-extension.json');
+      if (await this._fileExists(manifestPath)) {
+        const content = await fs.readFile(manifestPath, 'utf8');
+        try {
+          const json = JSON.parse(content);
+          metadata.gemini = json;
+        } catch {}
+      }
+    }
+
+    return metadata;
+  }
+
+  /**
+   * Check if file exists
+   */
+  async _fileExists(filePath) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if file is valid JSON
+   */
+  async _isValidJSON(filePath) {
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      JSON.parse(content);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Check if file has YAML frontmatter
+   */
+  async _hasYAMLFrontmatter(filePath) {
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      return /^---\n[\s\S]+?\n---/.test(content);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Extract YAML frontmatter from file
+   */
+  async _extractYAMLFrontmatter(filePath) {
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const match = content.match(/^---\n([\s\S]+?)\n---/);
+      if (match) {
+        // Simple YAML parser for basic key-value pairs
+        const yaml = match[1];
+        const parsed = {};
+
+        const lines = yaml.split('\n');
+        let currentKey = null;
+        let currentValue = null;
+
+        for (const line of lines) {
+          if (line.trim().startsWith('-')) {
+            // Array item
+            if (currentKey && Array.isArray(parsed[currentKey])) {
+              parsed[currentKey].push(line.trim().substring(1).trim());
+            }
+          } else if (line.includes(':')) {
+            // Key-value pair
+            const [key, ...valueParts] = line.split(':');
+            const value = valueParts.join(':').trim();
+            currentKey = key.trim();
+
+            if (value === '') {
+              // Array or multi-line value
+              parsed[currentKey] = [];
+            } else {
+              parsed[currentKey] = value;
+            }
+          }
+        }
+
+        return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+export default PlatformDetector;
+```
+
+src/analyzers/validator.js
+```
+/**
+ * Validation Utilities
+ * Validates that converted skills/extensions meet platform requirements
+ */
+
+import fs from 'fs/promises';
+import path from 'path';
+import { PLATFORM_TYPES } from './detector.js';
+
+export class Validator {
+  constructor() {
+    this.errors = [];
+    this.warnings = [];
+  }
+
+  /**
+   * Validate a skill/extension for a specific platform
+   * @param {string} dirPath - Path to the directory to validate
+   * @param {string} platform - Target platform (claude, gemini, or universal)
+   * @returns {Promise<{valid: boolean, errors: array, warnings: array}>}
+   */
+  async validate(dirPath, platform) {
+    this.errors = [];
+    this.warnings = [];
+
+    try {
+      if (platform === PLATFORM_TYPES.CLAUDE || platform === PLATFORM_TYPES.UNIVERSAL) {
+        await this._validateClaude(dirPath);
+      }
+
+      if (platform === PLATFORM_TYPES.GEMINI || platform === PLATFORM_TYPES.UNIVERSAL) {
+        await this._validateGemini(dirPath);
+      }
+
+      return {
+        valid: this.errors.length === 0,
+        errors: this.errors,
+        warnings: this.warnings
+      };
+    } catch (error) {
+      this.errors.push(`Validation failed: ${error.message}`);
+      return {
+        valid: false,
+        errors: this.errors,
+        warnings: this.warnings
+      };
+    }
+  }
+
+  /**
+   * Validate Claude skill requirements
+   */
+  async _validateClaude(dirPath) {
+    // Check for SKILL.md
+    const skillPath = path.join(dirPath, 'SKILL.md');
+    if (!await this._fileExists(skillPath)) {
+      this.errors.push('Missing required file: SKILL.md');
+      return;
+    }
+
+    // Validate SKILL.md frontmatter
+    const content = await fs.readFile(skillPath, 'utf8');
+    const frontmatterMatch = content.match(/^---\n([\s\S]+?)\n---/);
+
+    if (!frontmatterMatch) {
+      this.errors.push('SKILL.md must have YAML frontmatter');
+      return;
+    }
+
+    const frontmatter = this._parseYAML(frontmatterMatch[1]);
+
+    // Check required frontmatter fields
+    if (!frontmatter.name) {
+      this.errors.push('SKILL.md frontmatter missing required field: name');
+    } else {
+      // Validate name format
+      if (!/^[a-z0-9-]+$/.test(frontmatter.name)) {
+        this.errors.push('Skill name must be lowercase letters, numbers, and hyphens only');
+      }
+      if (frontmatter.name.length > 64) {
+        this.errors.push('Skill name must be 64 characters or less');
+      }
+    }
+
+    if (!frontmatter.description) {
+      this.errors.push('SKILL.md frontmatter missing required field: description');
+    } else {
+      if (frontmatter.description.length > 1024) {
+        this.errors.push('Description must be 1024 characters or less');
+      }
+      if (frontmatter.description.length < 50) {
+        this.warnings.push('Description should be descriptive (at least 50 characters recommended)');
+      }
+    }
+
+    // Check for marketplace.json (optional but recommended)
+    const marketplacePath = path.join(dirPath, '.claude-plugin', 'marketplace.json');
+    if (!await this._fileExists(marketplacePath)) {
+      this.warnings.push('Missing .claude-plugin/marketplace.json (recommended for MCP server integration)');
+    } else {
+      await this._validateMarketplaceJSON(marketplacePath);
+    }
+
+    // Validate file paths use forward slashes
+    if (content.includes('\\')) {
+      this.warnings.push('Use forward slashes (/) for file paths, not backslashes (\\)');
+    }
+  }
+
+  /**
+   * Validate Gemini extension requirements
+   */
+  async _validateGemini(dirPath) {
+    // Check for gemini-extension.json
+    const manifestPath = path.join(dirPath, 'gemini-extension.json');
+    if (!await this._fileExists(manifestPath)) {
+      this.errors.push('Missing required file: gemini-extension.json');
+      return;
+    }
+
+    // Validate manifest JSON
+    const content = await fs.readFile(manifestPath, 'utf8');
+    let manifest;
+
+    try {
+      manifest = JSON.parse(content);
+    } catch (error) {
+      this.errors.push(`Invalid JSON in gemini-extension.json: ${error.message}`);
+      return;
+    }
+
+    // Check required fields
+    if (!manifest.name) {
+      this.errors.push('gemini-extension.json missing required field: name');
+    } else {
+      // Validate name matches directory
+      const dirName = path.basename(dirPath);
+      if (manifest.name !== dirName) {
+        this.warnings.push(`Extension name "${manifest.name}" should match directory name "${dirName}"`);
+      }
+    }
+
+    if (!manifest.version) {
+      this.errors.push('gemini-extension.json missing required field: version');
+    }
+
+    // Validate MCP servers configuration
+    if (manifest.mcpServers) {
+      for (const [serverName, config] of Object.entries(manifest.mcpServers)) {
+        if (!config.command) {
+          this.errors.push(`MCP server "${serverName}" missing required field: command`);
+        }
+
+        if (config.args) {
+          // Check for proper variable substitution
+          const argsStr = JSON.stringify(config.args);
+          if (argsStr.includes('mcp-server') && !argsStr.includes('${extensionPath}')) {
+            this.warnings.push(`MCP server "${serverName}" should use \${extensionPath} variable for paths`);
+          }
+        }
+      }
+    }
+
+    // Validate settings if present
+    if (manifest.settings) {
+      if (!Array.isArray(manifest.settings)) {
+        this.errors.push('settings must be an array');
+      } else {
+        manifest.settings.forEach((setting, index) => {
+          if (!setting.name) {
+            this.errors.push(`Setting at index ${index} missing required field: name`);
+          }
+          if (!setting.description) {
+            this.warnings.push(`Setting "${setting.name}" should have a description`);
+          }
+        });
+      }
+    }
+
+    // Check for context file
+    const contextFileName = manifest.contextFileName || 'GEMINI.md';
+    const contextPath = path.join(dirPath, contextFileName);
+    if (!await this._fileExists(contextPath)) {
+      this.warnings.push(`Missing context file: ${contextFileName} (recommended for providing context to Gemini)`);
+    }
+
+    // Validate excludeTools if present
+    if (manifest.excludeTools) {
+      if (!Array.isArray(manifest.excludeTools)) {
+        this.errors.push('excludeTools must be an array');
+      }
+    }
+  }
+
+  /**
+   * Validate marketplace.json structure
+   */
+  async _validateMarketplaceJSON(filePath) {
+    const content = await fs.readFile(filePath, 'utf8');
+    let marketplace;
+
+    try {
+      marketplace = JSON.parse(content);
+    } catch (error) {
+      this.errors.push(`Invalid JSON in marketplace.json: ${error.message}`);
+      return;
+    }
+
+    // Check required fields
+    if (!marketplace.name) {
+      this.errors.push('marketplace.json missing required field: name');
+    }
+
+    if (!marketplace.metadata) {
+      this.errors.push('marketplace.json missing required field: metadata');
+    } else {
+      if (!marketplace.metadata.description) {
+        this.warnings.push('marketplace.json metadata should include description');
+      }
+      if (!marketplace.metadata.version) {
+        this.warnings.push('marketplace.json metadata should include version');
+      }
+    }
+
+    if (!marketplace.plugins || !Array.isArray(marketplace.plugins)) {
+      this.errors.push('marketplace.json missing required field: plugins (array)');
+    } else {
+      marketplace.plugins.forEach((plugin, index) => {
+        if (!plugin.name) {
+          this.errors.push(`Plugin at index ${index} missing required field: name`);
+        }
+        if (!plugin.description) {
+          this.errors.push(`Plugin at index ${index} missing required field: description`);
+        }
+      });
+    }
+  }
+
+  /**
+   * Simple YAML parser for validation
+   */
+  _parseYAML(yaml) {
+    const parsed = {};
+    const lines = yaml.split('\n');
+    let currentKey = null;
+
+    for (const line of lines) {
+      if (line.trim().startsWith('-')) {
+        // Array item
+        if (currentKey && Array.isArray(parsed[currentKey])) {
+          parsed[currentKey].push(line.trim().substring(1).trim());
+        }
+      } else if (line.includes(':')) {
+        // Key-value pair
+        const [key, ...valueParts] = line.split(':');
+        const value = valueParts.join(':').trim();
+        currentKey = key.trim();
+
+        if (value === '') {
+          // Array or multi-line value
+          parsed[currentKey] = [];
+        } else {
+          parsed[currentKey] = value;
+        }
+      }
+    }
+
+    return parsed;
+  }
+
+  /**
+   * Check if file exists
+   */
+  async _fileExists(filePath) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export default Validator;
 ```
 
 src/optional-features/fork-setup.js
