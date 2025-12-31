@@ -1,5 +1,0 @@
-[ ~/projects/temp/skill-porter][ main ≢  ?7 ~5]
-└─[ Error, check your command]> go run ./cmd/skill-porter-tui/
-# github.com/jduncan-rva/skill-porter/internal/skillportertui/ui
-internal/skillportertui/ui/update.go:9:2: "github.com/charmbracelet/bubbles/textinput" imported and not used
-internal/skillportertui/ui/update.go:28:6: declared and not used: cmd
